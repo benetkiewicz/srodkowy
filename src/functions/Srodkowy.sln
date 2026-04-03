@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Srodkowy.Functions", "Srodkowy.Functions\Srodkowy.Functions.csproj", "{F67E4661-2BBD-4216-A2EE-78CD29F3F408}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Srodkowy.Functions.Tests", "Srodkowy.Functions.Tests\Srodkowy.Functions.Tests.csproj", "{8B849BF9-BD5F-4028-BD7F-0FB80808AC01}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F67E4661-2BBD-4216-A2EE-78CD29F3F408}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F67E4661-2BBD-4216-A2EE-78CD29F3F408}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F67E4661-2BBD-4216-A2EE-78CD29F3F408}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F67E4661-2BBD-4216-A2EE-78CD29F3F408}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B849BF9-BD5F-4028-BD7F-0FB80808AC01}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B849BF9-BD5F-4028-BD7F-0FB80808AC01}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B849BF9-BD5F-4028-BD7F-0FB80808AC01}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B849BF9-BD5F-4028-BD7F-0FB80808AC01}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
