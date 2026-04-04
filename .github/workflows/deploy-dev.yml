@@ -50,13 +50,6 @@ jobs:
             exit 1
           fi
 
-      - name: Register required providers
-        shell: bash
-        run: |
-          for provider in Microsoft.App Microsoft.Web Microsoft.Insights Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Storage Microsoft.Sql Microsoft.KeyVault; do
-            az provider register --namespace "$provider" --wait
-          done
-
       - name: Deploy infrastructure
         shell: bash
         run: |
