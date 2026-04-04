@@ -13,7 +13,7 @@ public sealed class ApplyMigrationsFunction(
 {
     [Function("ApplyMigrations")]
     public async Task<HttpResponseData> RunAsync(
-        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "admin/migrations/apply")]
+        [HttpTrigger(AuthorizationLevel.Function, "post", Route = "ops/migrations/apply")]
         HttpRequestData request,
         CancellationToken cancellationToken)
     {

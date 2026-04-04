@@ -135,7 +135,7 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 |---|---|
 | `POST /api/ingestion/run` | Run ingestion for all active sources |
 | `POST /api/ingestion/run/{sourceId}` | Run ingestion for a specific source |
-| `POST /api/admin/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
+| `POST /api/ops/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
 
 ### Target Content API
 

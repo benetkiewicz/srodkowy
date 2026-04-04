@@ -91,7 +91,7 @@ jobs:
         env:
           MIGRATION_KEY: ${{ secrets.FUNC_MIGRATIONS_KEY }}
         run: |
-          url="https://${FUNCTION_APP_HOSTNAME}/api/admin/migrations/apply"
+          url="https://${FUNCTION_APP_HOSTNAME}/api/ops/migrations/apply"
           for attempt in 1 2 3 4 5; do
             status=$(curl --silent --show-error --output migration-response.json --write-out "%{http_code}" \
               -X POST "$url" \
