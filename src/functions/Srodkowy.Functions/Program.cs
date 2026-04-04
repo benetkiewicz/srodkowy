@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using Microsoft.Azure.Functions.Worker.Builder;
@@ -34,6 +35,7 @@ builder.Services.AddOpenTelemetry()
     {
         tracing.AddSource(
             ObservabilityOptions.ArticlePreparationSourceName,
+            ObservabilityOptions.ClusteringSourceName,
             ObservabilityOptions.CleanupChatSourceName,
             ObservabilityOptions.ChatSourceName,
             ObservabilityOptions.EmbeddingSourceName);
@@ -138,6 +140,61 @@ builder.Services
     });
 
 builder.Services
+    .AddOptions<ClusteringOptions>()
+    .Configure(options =>
+    {
+        if (int.TryParse(GetSetting(builder.Configuration, "Clustering:LookbackHours"), out var lookbackHours))
+        {
+            options.LookbackHours = lookbackHours;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Clustering:MinQualityScore"), out var minQualityScore))
+        {
+            options.MinQualityScore = minQualityScore;
+        }
+
+        if (TryParseDouble(GetSetting(builder.Configuration, "Clustering:NearDuplicateSimilarity"), out var nearDuplicateSimilarity))
+        {
+            options.NearDuplicateSimilarity = nearDuplicateSimilarity;
+        }
+
+        if (TryParseDouble(GetSetting(builder.Configuration, "Clustering:PairSimilarityThreshold"), out var pairSimilarityThreshold))
+        {
+            options.PairSimilarityThreshold = pairSimilarityThreshold;
+        }
+
+        if (TryParseDouble(GetSetting(builder.Configuration, "Clustering:MergeSimilarityThreshold"), out var mergeSimilarityThreshold))
+        {
+            options.MergeSimilarityThreshold = mergeSimilarityThreshold;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Clustering:MaxPairTimespanHours"), out var maxPairTimespanHours))
+        {
+            options.MaxPairTimespanHours = maxPairTimespanHours;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Clustering:MaxClusterTimespanHours"), out var maxClusterTimespanHours))
+        {
+            options.MaxClusterTimespanHours = maxClusterTimespanHours;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Clustering:MaxClusterSize"), out var maxClusterSize))
+        {
+            options.MaxClusterSize = maxClusterSize;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Clustering:MaxClusters"), out var maxClusters))
+        {
+            options.MaxClusters = maxClusters;
+        }
+
+        if (bool.TryParse(GetSetting(builder.Configuration, "Clustering:ExcludeNeedsReview"), out var excludeNeedsReview))
+        {
+            options.ExcludeNeedsReview = excludeNeedsReview;
+        }
+    });
+
+builder.Services
     .AddOptions<ObservabilityOptions>()
     .Configure(options =>
     {
@@ -171,6 +228,7 @@ builder.Services.AddOpenAiClients();
 builder.Services.AddScoped<IngestionService>();
 builder.Services.AddScoped<ArticleCleanupService>();
 builder.Services.AddScoped<EmbeddingService>();
+builder.Services.AddScoped<CandidateClusteringService>();
 
 builder.Build().Run();
 
@@ -182,6 +240,9 @@ static string? GetSetting(IConfiguration configuration, string key) =>
 
 static int GetIntSetting(IConfiguration configuration, string key, int fallback) =>
     int.TryParse(GetSetting(configuration, key), out var value) ? value : fallback;
+
+static bool TryParseDouble(string? value, out double parsed) =>
+    double.TryParse(value, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out parsed);
 
 static string? ResolveSetting(IConfiguration configuration, string key)
 {

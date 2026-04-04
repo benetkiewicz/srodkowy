@@ -4,6 +4,8 @@ public sealed class ObservabilityOptions
 {
     public const string ArticlePreparationSourceName = "Srodkowy.Functions.ArticlePreparation";
 
+    public const string ClusteringSourceName = "Srodkowy.Functions.Clustering";
+
     public const string CleanupChatSourceName = "Srodkowy.Functions.AI.Cleanup";
 
     public const string ChatSourceName = "Srodkowy.Functions.AI.Chat";

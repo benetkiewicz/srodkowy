@@ -12,6 +12,12 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
 
     public DbSet<IngestionRun> IngestionRuns => Set<IngestionRun>();
 
+    public DbSet<ClusterRun> ClusterRuns => Set<ClusterRun>();
+
+    public DbSet<CandidateCluster> CandidateClusters => Set<CandidateCluster>();
+
+    public DbSet<CandidateClusterArticle> CandidateClusterArticles => Set<CandidateClusterArticle>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var sourceBuilder = modelBuilder.Entity<Source>();
@@ -94,5 +100,48 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
         ingestionRunBuilder.Property(run => run.TriggeredBy).HasMaxLength(100).IsRequired();
         ingestionRunBuilder.Property(run => run.ErrorSummary).HasColumnType("nvarchar(max)");
         ingestionRunBuilder.HasIndex(run => run.StartedAt);
+
+        var clusterRunBuilder = modelBuilder.Entity<ClusterRun>();
+        clusterRunBuilder.ToTable("ClusterRuns");
+        clusterRunBuilder.HasKey(run => run.Id);
+        clusterRunBuilder.Property(run => run.StartedAt).HasColumnType("datetimeoffset");
+        clusterRunBuilder.Property(run => run.CompletedAt).HasColumnType("datetimeoffset");
+        clusterRunBuilder.Property(run => run.Status).HasMaxLength(40).IsRequired();
+        clusterRunBuilder.Property(run => run.TriggeredBy).HasMaxLength(100).IsRequired();
+        clusterRunBuilder.Property(run => run.ErrorSummary).HasColumnType("nvarchar(max)");
+        clusterRunBuilder.HasIndex(run => run.StartedAt);
+
+        var candidateClusterBuilder = modelBuilder.Entity<CandidateCluster>();
+        candidateClusterBuilder.ToTable("CandidateClusters");
+        candidateClusterBuilder.HasKey(cluster => cluster.Id);
+        candidateClusterBuilder.Property(cluster => cluster.Status).HasMaxLength(20).IsRequired();
+        candidateClusterBuilder.Property(cluster => cluster.SelectionVersion).HasMaxLength(50).IsRequired();
+        candidateClusterBuilder.Property(cluster => cluster.WindowStartAt).HasColumnType("datetimeoffset");
+        candidateClusterBuilder.Property(cluster => cluster.WindowEndAt).HasColumnType("datetimeoffset");
+        candidateClusterBuilder.HasIndex(cluster => cluster.ClusterRunId);
+        candidateClusterBuilder.HasIndex(cluster => cluster.Rank);
+        candidateClusterBuilder.HasIndex(cluster => cluster.Status);
+        candidateClusterBuilder.HasOne(cluster => cluster.ClusterRun)
+            .WithMany(run => run.CandidateClusters)
+            .HasForeignKey(cluster => cluster.ClusterRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+        candidateClusterBuilder.HasOne(cluster => cluster.RepresentativeArticle)
+            .WithMany()
+            .HasForeignKey(cluster => cluster.RepresentativeArticleId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        var candidateClusterArticleBuilder = modelBuilder.Entity<CandidateClusterArticle>();
+        candidateClusterArticleBuilder.ToTable("CandidateClusterArticles");
+        candidateClusterArticleBuilder.HasKey(clusterArticle => new { clusterArticle.CandidateClusterId, clusterArticle.ArticleId });
+        candidateClusterArticleBuilder.Property(clusterArticle => clusterArticle.Camp).HasMaxLength(20).IsRequired();
+        candidateClusterArticleBuilder.HasIndex(clusterArticle => clusterArticle.ArticleId);
+        candidateClusterArticleBuilder.HasOne(clusterArticle => clusterArticle.CandidateCluster)
+            .WithMany(cluster => cluster.Articles)
+            .HasForeignKey(clusterArticle => clusterArticle.CandidateClusterId)
+            .OnDelete(DeleteBehavior.Cascade);
+        candidateClusterArticleBuilder.HasOne(clusterArticle => clusterArticle.Article)
+            .WithMany()
+            .HasForeignKey(clusterArticle => clusterArticle.ArticleId)
+            .OnDelete(DeleteBehavior.NoAction);
     }
 }
