@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.Exporter;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Azure.Functions.Worker.OpenTelemetry;
@@ -39,7 +41,14 @@ builder.Services.AddOpenTelemetry()
         tracing.AddSqlClientInstrumentation();
     })
     .UseFunctionsWorkerDefaults()
-    .UseAzureMonitorExporter();
+    .UseAzureMonitorExporter(options =>
+    {
+        var authString = builder.Configuration["APPLICATIONINSIGHTS_AUTHENTICATION_STRING"];
+        if (TryExtractClientId(authString, out var clientId))
+        {
+            options.Credential = new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(clientId));
+        }
+    });
 
 builder.Services
     .AddOptions<FirecrawlOptions>()
@@ -202,4 +211,25 @@ static string FindSettingsDirectory()
     }
 
     return Directory.GetCurrentDirectory();
+}
+
+static bool TryExtractClientId(string? authenticationString, [NotNullWhen(true)] out string? clientId)
+{
+    clientId = null;
+    if (string.IsNullOrWhiteSpace(authenticationString))
+    {
+        return false;
+    }
+
+    foreach (var part in authenticationString.Split(';'))
+    {
+        var trimmed = part.Trim();
+        if (trimmed.StartsWith("ClientId=", StringComparison.OrdinalIgnoreCase))
+        {
+            clientId = trimmed["ClientId=".Length..];
+            return !string.IsNullOrWhiteSpace(clientId);
+        }
+    }
+
+    return false;
 }
