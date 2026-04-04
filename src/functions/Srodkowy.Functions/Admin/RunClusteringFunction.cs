@@ -27,7 +27,6 @@ public sealed class RunClusteringFunction(CandidateClusteringService clusteringS
     {
         using var reader = new StreamReader(request.Body, leaveOpen: true);
         var body = await reader.ReadToEndAsync(cancellationToken);
-        request.Body.Position = 0;
 
         if (string.IsNullOrWhiteSpace(body))
         {
