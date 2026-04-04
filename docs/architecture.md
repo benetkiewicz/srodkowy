@@ -6,7 +6,7 @@
 
 ## Current Status
 
-Stage 0 is verified in Azure dev, and the next backend slice now includes article preparation.
+Stage 0 is verified in Azure dev, and the next backend slices now include article preparation and candidate clustering.
 
 - Azure Functions isolated worker solution runs on `.NET 10` under `src/functions`
 - EF Core 10 migrations are wired for SQL Server 2025 / Azure SQL
@@ -15,9 +15,11 @@ Stage 0 is verified in Azure dev, and the next backend slice now includes articl
 - Firecrawl-backed raw ingestion working through manual HTTP triggers
 - Raw articles and ingestion runs persisted in SQL Server Developer 2025 locally and Azure SQL in cloud
 - Manual article-cleanup and embedding-preparation endpoints are implemented in the backend
+- Manual candidate-clustering endpoint is implemented in the backend
+- Candidate cross-camp clusters are ranked and persisted in SQL as an intermediate pre-synthesis artifact
 - Bicep and GitHub Actions scaffolding added for Azure deployment into `rg-srodkowy-pc`
 
-The following remain target-state only for now: clustering, synthesis, edition publishing, Durable orchestration, and read-side content API endpoints.
+The following remain target-state only for now: synthesis, edition publishing, Durable orchestration, and read-side content API endpoints.
 
 ## Current Deployment Model
 
@@ -63,10 +65,11 @@ srodkowy/
 │   ├── functions/                         # .NET solution
 │   │   ├── Srodkowy.Functions/            # Azure Functions project
 │   │   │   ├── Configuration/             # Options classes, source registry
+│   │   │   ├── Admin/                     # Manual admin / operations endpoints
 │   │   │   ├── Ingestion/                 # Manual HTTP-triggered ingestion functions
-│   │   │   ├── Models/                    # Source, Article, IngestionRun
+│   │   │   ├── Models/                    # Source, Article, IngestionRun, candidate clustering entities
 │   │   │   ├── Persistence/               # DbContext, design-time factory, EF migrations
-│   │   │   ├── Services/                  # Firecrawl client, ingestion service, URL/content helpers
+│   │   │   ├── Services/                  # Firecrawl, ingestion, preparation, and candidate clustering services
 │   │   │   ├── Program.cs                 # Host builder + DI
 │   │   │   └── Srodkowy.Functions.csproj
 │   │   ├── Srodkowy.Functions.Tests/      # xUnit unit tests
@@ -97,6 +100,12 @@ srodkowy/
   - a lightweight deterministic normalization pass removes exact duplicate blocks and normalizes input before the LLM call
   - cleanup status uses `pending/running/completed/failed/stale` so articles are not sent twice for the same content version
   - embeddings are generated from `Title + CleanedContentText`, not raw scraped text
+- Prepared articles can then be manually grouped into candidate story clusters:
+  - `POST /api/ops/clusters/run` selects recent active-source articles with completed cleanup and embeddings
+  - probable non-articles are excluded and `NeedsReview` items are excluded by default
+  - near-duplicate same-source articles are collapsed before clustering
+  - in-memory agglomerative clustering forms ranked cross-camp candidate clusters persisted in `ClusterRuns`, `CandidateClusters`, and `CandidateClusterArticles`
+  - qualified clusters are intermediate synthesis inputs, not yet published stories
 - Each run is tracked in `IngestionRuns`
 - Requests are processed sequentially and paced to stay within Firecrawl free-plan `/scrape` limits
 - Cloud deployments apply EF migrations through a dedicated admin-only HTTP function after code publish
@@ -124,10 +133,12 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 
 #### Step 3: Clustering
 
+Current implementation already supports this stage as a manual admin operation. The target state is to run the same clustering logic inside the scheduled orchestration.
+
 - Computes cosine similarity between article embeddings
 - Groups articles into event clusters using agglomerative clustering
 - Filters: keeps only clusters where both left AND right camp sources are represented
-- Ranks clusters by: number of sources, camp balance, narrative divergence
+- Persists ranked candidate clusters for later synthesis
 
 #### Step 4: Synthesis
 
@@ -159,6 +170,7 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 | `POST /api/ingestion/run/{sourceId}` | Run ingestion for a specific source |
 | `POST /api/ops/articles/cleanup/run` | Run LLM-first article cleanup / preparation |
 | `POST /api/ops/articles/embeddings/run` | Generate embeddings from prepared article text |
+| `POST /api/ops/clusters/run` | Form and persist candidate cross-camp clusters from prepared article embeddings |
 | `POST /api/ops/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
 
 ### Target Content API
@@ -237,6 +249,51 @@ The target database is Azure SQL Database, with local development using SQL Serv
 | ArticleCount | int | Newly inserted articles |
 | ErrorSummary | nvarchar(max) null | Aggregated run errors |
 
+#### ClusterRuns
+| Column | Type | Description |
+|---|---|---|
+| Id | uniqueidentifier | PK |
+| StartedAt | datetimeoffset | Run start time |
+| CompletedAt | datetimeoffset null | Run completion time |
+| Status | nvarchar(40) | `running`, `completed`, `failed` |
+| TriggeredBy | nvarchar(100) | Trigger source identifier |
+| LookbackHours | int | Article lookback window used for candidate selection |
+| CandidateArticleCount | int | Prepared articles considered for clustering |
+| DeduplicatedArticleCount | int | Same-source near-duplicates removed before clustering |
+| ClusterCount | int | Raw clusters formed before qualification |
+| QualifiedClusterCount | int | Cross-camp candidate clusters persisted for synthesis |
+| ErrorSummary | nvarchar(max) null | Aggregated run errors |
+
+#### CandidateClusters
+| Column | Type | Description |
+|---|---|---|
+| Id | uniqueidentifier | PK |
+| ClusterRunId | uniqueidentifier | FK → ClusterRuns |
+| RepresentativeArticleId | uniqueidentifier | FK → Articles |
+| Rank | int | Display / processing order within the run |
+| RankScore | float | Aggregate score used for ranking |
+| Status | nvarchar(20) | Currently `candidate` |
+| ArticleCount | int | Number of articles in the cluster |
+| DistinctSourceCount | int | Number of distinct sources represented |
+| LeftArticleCount | int | Count of left-camp articles |
+| RightArticleCount | int | Count of right-camp articles |
+| WindowStartAt | datetimeoffset | Earliest article timestamp in the cluster |
+| WindowEndAt | datetimeoffset | Latest article timestamp in the cluster |
+| MeanSimilarity | float | Mean pairwise similarity within the cluster |
+| NarrativeDivergenceScore | float | Left-vs-right centroid divergence score |
+| BalanceScore | float | Camp-balance contribution used for ranking |
+| SelectionVersion | nvarchar(50) | Clustering logic version |
+
+#### CandidateClusterArticles
+| Column | Type | Description |
+|---|---|---|
+| CandidateClusterId | uniqueidentifier | FK → CandidateClusters |
+| ArticleId | uniqueidentifier | FK → Articles |
+| SourceId | uniqueidentifier | Source copied onto the membership row |
+| Camp | nvarchar(20) | `left` or `right` |
+| SimilarityToRepresentative | float | Similarity against the representative article |
+| IsRepresentative | bit | Whether this article is the cluster representative |
+
 ### Target Schema
 
 #### Editions
@@ -279,7 +336,7 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 
 1. **Phase 1: Raw ingestion** — Implemented with Azure Functions, SQL Server / Azure SQL, EF Core migrations, seeded sources, Firecrawl scraping, and deduplicated raw article persistence.
 2. **Phase 2: Article preparation and embeddings** — Run all scraped articles through LLM-first cleanup/extraction, classify probable non-articles, and persist native Azure SQL `vector(1536)` embeddings from cleaned text.
-3. **Phase 3: Clustering** — Form cross-camp candidate story clusters from prepared article embeddings.
+3. **Phase 3: Clustering** — Implemented as a manual candidate-clustering slice that forms ranked cross-camp candidate story clusters from prepared article embeddings and persists them for later synthesis.
 4. **Phase 4: Synthesis and content API** — Generate story syntheses, persist editions, stories, and story sides, and expose the read API for the frontend build.
 
 ## Key Design Decisions
@@ -323,6 +380,16 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `Embedding:BatchSize` | Max articles to embed in one manual run |
 | `Embedding:LookbackHours` | Article lookback window for embedding selection |
 | `Embedding:MaxInputCharacters` | Max cleaned-text input length used for embedding generation |
+| `Clustering:LookbackHours` | Article lookback window for clustering candidate selection |
+| `Clustering:MinQualityScore` | Minimum cleanup quality score required for clustering |
+| `Clustering:NearDuplicateSimilarity` | Same-source similarity threshold for pre-clustering deduplication |
+| `Clustering:PairSimilarityThreshold` | Minimum article-pair similarity needed to justify a merge |
+| `Clustering:MergeSimilarityThreshold` | Minimum average cluster similarity required for a merge |
+| `Clustering:MaxPairTimespanHours` | Max timestamp gap allowed for the strongest merge-justifying pair |
+| `Clustering:MaxClusterTimespanHours` | Max total cluster time window |
+| `Clustering:MaxClusterSize` | Max articles allowed in one candidate cluster |
+| `Clustering:MaxClusters` | Max qualified candidate clusters persisted per run |
+| `Clustering:ExcludeNeedsReview` | Whether clustering excludes `NeedsReview` articles by default |
 | `Pipeline:CronSchedule` | Timer trigger CRON (default: `0 0 5,17 * * *`) |
 | `GitHub:Token` | For triggering frontend rebuild |
 | `GitHub:RepoOwner` | Repository owner |
