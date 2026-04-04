@@ -122,27 +122,54 @@ public sealed class IngestionService(
         ISet<string> seenUrls,
         CancellationToken cancellationToken)
     {
-        var discoveredLinks = await firecrawlClient.GetLinksAsync(source.DiscoveryUrl, cancellationToken);
+        var discoveredLinks = await firecrawlClient.GetDiscoveredLinksAsync(source.DiscoveryUrl, cancellationToken);
+        var urlQualifiedCount = 0;
+        var shortDiscoveredTitleRejectedCount = 0;
+        var uniqueCandidateUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var titleQualifiedCandidates = new List<string>();
 
-        var candidateLinks = discoveredLinks
-            .Select(UrlNormalizer.Normalize)
-            .Where(url => UrlNormalizer.IsCandidateArticleUrl(source.BaseUrl, url))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        foreach (var discoveredLink in discoveredLinks)
+        {
+            if (!TryNormalizeCandidateUrl(discoveredLink.Url, out var normalizedUrl)
+                || !UrlNormalizer.IsCandidateArticleUrl(source.BaseUrl, normalizedUrl))
+            {
+                continue;
+            }
+
+            urlQualifiedCount++;
+
+            if (!IsAcceptedTitle(discoveredLink.Title, out var normalizedTitle))
+            {
+                shortDiscoveredTitleRejectedCount++;
+                continue;
+            }
+
+            if (!uniqueCandidateUrls.Add(normalizedUrl))
+            {
+                continue;
+            }
+
+            titleQualifiedCandidates.Add(normalizedUrl);
+        }
+
+        var candidateLinks = titleQualifiedCandidates
             .Take(options.Value.MaxCandidateLinksPerSource)
             .ToArray();
 
-        logger.LogInformation(
-            "Source {SourceName}: discovered {DiscoveredLinks} links, {CandidateLinks} candidates",
-            source.Name,
-            discoveredLinks.Count,
-            candidateLinks.Length);
-
         var articles = new List<Article>();
+        var scrapeAttempts = 0;
+        var shortFinalTitleRejectedCount = 0;
 
-        foreach (var candidateLink in candidateLinks.Take(options.Value.MaxArticlesPerSource))
+        foreach (var candidateLink in candidateLinks)
         {
+            if (articles.Count >= options.Value.MaxArticlesPerSource)
+            {
+                break;
+            }
+
             try
             {
+                scrapeAttempts++;
                 var page = await firecrawlClient.ScrapeArticleAsync(candidateLink, cancellationToken);
                 var normalizedUrl = UrlNormalizer.Normalize(page.Url);
 
@@ -157,8 +184,9 @@ public sealed class IngestionService(
                     ? ArticleContentConverter.ExtractTitle(page.Markdown)
                     : page.Title.Trim();
 
-                if (string.IsNullOrWhiteSpace(title))
+                if (!IsAcceptedTitle(title, out var normalizedTitle))
                 {
+                    shortFinalTitleRejectedCount++;
                     continue;
                 }
 
@@ -172,7 +200,7 @@ public sealed class IngestionService(
                     Id = Guid.NewGuid(),
                     SourceId = source.Id,
                     Url = normalizedUrl,
-                    Title = title,
+                    Title = normalizedTitle,
                     ContentMarkdown = page.Markdown.Trim(),
                     ContentText = plainText,
                     PublishedAt = page.PublishedAt,
@@ -186,7 +214,39 @@ public sealed class IngestionService(
             }
         }
 
+        logger.LogInformation(
+            "Source {SourceName}: discovered {DiscoveredLinks} links, {UrlQualifiedLinks} url-qualified, {TitleQualifiedLinks} title-qualified, {CandidateLinks} candidates after cap, {ScrapeAttempts} scrapes, {AcceptedArticles} accepted, {ShortDiscoveredTitleRejectedCount} short discovered-title rejects, {ShortFinalTitleRejectedCount} short final-title rejects",
+            source.Name,
+            discoveredLinks.Count,
+            urlQualifiedCount,
+            titleQualifiedCandidates.Count,
+            candidateLinks.Length,
+            scrapeAttempts,
+            articles.Count,
+            shortDiscoveredTitleRejectedCount,
+            shortFinalTitleRejectedCount);
+
         return new SourceIngestionResult(discoveredLinks.Count, candidateLinks.Length, articles);
+    }
+
+    private bool IsAcceptedTitle(string? title, out string normalizedTitle)
+    {
+        normalizedTitle = title?.Trim() ?? string.Empty;
+        return normalizedTitle.Length >= options.Value.MinCandidateTitleLength;
+    }
+
+    private static bool TryNormalizeCandidateUrl(string url, out string normalizedUrl)
+    {
+        try
+        {
+            normalizedUrl = UrlNormalizer.Normalize(url);
+            return true;
+        }
+        catch (UriFormatException)
+        {
+            normalizedUrl = string.Empty;
+            return false;
+        }
     }
 
     public sealed record IngestionResult(
@@ -202,4 +262,5 @@ public sealed class IngestionService(
         int DiscoveredLinks,
         int CandidateLinks,
         IReadOnlyList<Article> Articles);
+
 }

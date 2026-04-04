@@ -74,6 +74,11 @@ builder.Services
             options.MaxArticlesPerSource = maxArticlesPerSource;
         }
 
+        if (int.TryParse(GetSetting(builder.Configuration, "Ingestion:MinCandidateTitleLength"), out var minCandidateTitleLength))
+        {
+            options.MinCandidateTitleLength = minCandidateTitleLength;
+        }
+
     });
 
 builder.Services

@@ -233,7 +233,7 @@ The target database is Azure SQL Database, with local development using SQL Serv
 | TriggeredBy | nvarchar(100) | Trigger source identifier |
 | SourceCount | int | Number of sources included in the run |
 | DiscoveredLinkCount | int | Raw links returned from discovery pages |
-| CandidateLinkCount | int | Links kept after filtering |
+| CandidateLinkCount | int | Title-qualified candidate links kept for scraping |
 | ArticleCount | int | Newly inserted articles |
 | ErrorSummary | nvarchar(max) null | Aggregated run errors |
 
@@ -313,8 +313,9 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `Firecrawl:RequestsPerMinute` | Firecrawl `/scrape` pacing budget |
 | `Database:ConnectionString` | SQL Server / Azure SQL connection string |
 | `Admin:Migrations:Enabled` | Enables the admin migration HTTP endpoint |
-| `Ingestion:MaxCandidateLinksPerSource` | Max filtered article links per source |
-| `Ingestion:MaxArticlesPerSource` | Max article page scrapes per source |
+| `Ingestion:MaxCandidateLinksPerSource` | Max title-qualified candidate links retained per source |
+| `Ingestion:MaxArticlesPerSource` | Max accepted articles persisted per source |
+| `Ingestion:MinCandidateTitleLength` | Minimum title length required both before and after article scrape |
 | `Cleanup:BatchSize` | Max articles to clean in one manual run |
 | `Cleanup:LookbackHours` | Article lookback window for cleanup selection |
 | `Cleanup:MaxInputCharacters` | Max normalized markdown length sent to LLM cleanup |

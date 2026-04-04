@@ -22,11 +22,9 @@ public sealed class FirecrawlClient(
 
     private static DateTimeOffset _nextAllowedRequestAtUtc = DateTimeOffset.MinValue;
 
-    public async Task<IReadOnlyList<string>> GetLinksAsync(string url, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DiscoveredPageLink>> GetDiscoveredLinksAsync(string url, CancellationToken cancellationToken)
     {
-        var payload = await PostScrapeAsync(new FirecrawlLinksScrapeRequest(
-            url,
-            ["links"]), cancellationToken);
+        var payload = await PostAsync("v2/map", new FirecrawlMapRequest(url), cancellationToken);
 
         var root = payload.TryGetProperty("data", out var data) ? data : payload;
 
@@ -37,15 +35,18 @@ public sealed class FirecrawlClient(
 
         return linksElement
             .EnumerateArray()
-            .Select(element => element.GetString())
-            .Where(link => !string.IsNullOrWhiteSpace(link))
-            .Cast<string>()
+            .Where(element => element.ValueKind == JsonValueKind.Object)
+            .Select(element => new DiscoveredPageLink(
+                GetString(element, "url") ?? string.Empty,
+                GetString(element, "title"),
+                GetString(element, "description")))
+            .Where(link => !string.IsNullOrWhiteSpace(link.Url))
             .ToArray();
     }
 
     public async Task<ScrapedArticlePage> ScrapeArticleAsync(string url, CancellationToken cancellationToken)
     {
-        var payload = await PostScrapeAsync(new FirecrawlArticleScrapeRequest(
+        var payload = await PostAsync("v2/scrape", new FirecrawlArticleScrapeRequest(
             url,
             ["markdown"],
             onlyMainContent: true,
@@ -74,7 +75,7 @@ public sealed class FirecrawlClient(
             MetadataJson: metadata.ValueKind == JsonValueKind.Object ? metadata.GetRawText() : root.GetRawText());
     }
 
-    private async Task<JsonElement> PostScrapeAsync<TRequest>(TRequest request, CancellationToken cancellationToken)
+    private async Task<JsonElement> PostAsync<TRequest>(string requestPath, TRequest request, CancellationToken cancellationToken)
         where TRequest : class
     {
         if (string.IsNullOrWhiteSpace(options.Value.ApiKey))
@@ -92,7 +93,7 @@ public sealed class FirecrawlClient(
 
             try
             {
-                using var response = await httpClient.PostAsJsonAsync("v2/scrape", request, SerializerOptions, cancellationToken);
+                using var response = await httpClient.PostAsJsonAsync(requestPath, request, SerializerOptions, cancellationToken);
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
 
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests && attempt == 0)
@@ -210,9 +211,8 @@ public sealed class FirecrawlClient(
         return null;
     }
 
-    private sealed record FirecrawlLinksScrapeRequest(
-        string Url,
-        IReadOnlyList<string> Formats);
+    private sealed record FirecrawlMapRequest(
+        string Url);
 
     private sealed record FirecrawlArticleScrapeRequest(
         string Url,
@@ -226,4 +226,9 @@ public sealed class FirecrawlClient(
         string Markdown,
         DateTimeOffset? PublishedAt,
         string MetadataJson);
+
+    public sealed record DiscoveredPageLink(
+        string Url,
+        string? Title,
+        string? Description);
 }
