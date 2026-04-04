@@ -82,49 +82,54 @@ public sealed class EmbeddingService(
         string embeddingModel,
         CancellationToken cancellationToken)
     {
-        var runId = Guid.NewGuid();
-        var claimStartedAt = DateTimeOffset.UtcNow;
-        var runningExpiredBefore = claimStartedAt - RunningTimeout;
+        var strategy = dbContext.Database.CreateExecutionStrategy();
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
-        var eligibleIds = await dbContext.Articles
-            .Where(article => article.ScrapedAt >= cutoff)
-            .Where(article => article.CleanupStatus == ArticleCleanupStatus.Completed)
-            .Where(article => !article.IsProbablyNonArticle)
-            .Where(article => article.CleanedContentText != null)
-            .Where(article =>
-                article.EmbeddingStatus == ArticleEmbeddingStatus.Pending
-                || article.EmbeddingStatus == ArticleEmbeddingStatus.Failed
-                || article.EmbeddingStatus == ArticleEmbeddingStatus.Stale
-                || article.EmbeddingStatus == ArticleEmbeddingStatus.Running && article.EmbeddingStartedAt != null && article.EmbeddingStartedAt < runningExpiredBefore
-                || article.EmbeddingStatus == ArticleEmbeddingStatus.Completed && (article.EmbeddingModel != embeddingModel || article.EmbeddingTextHash == null || article.Embedding == null))
-            .OrderBy(article => article.ScrapedAt)
-            .Select(article => article.Id)
-            .Take(options.Value.BatchSize)
-            .ToArrayAsync(cancellationToken);
-
-        if (eligibleIds.Length == 0)
+        return await strategy.ExecuteAsync(async () =>
         {
+            var runId = Guid.NewGuid();
+            var claimStartedAt = DateTimeOffset.UtcNow;
+            var runningExpiredBefore = claimStartedAt - RunningTimeout;
+
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+            var eligibleIds = await dbContext.Articles
+                .Where(article => article.ScrapedAt >= cutoff)
+                .Where(article => article.CleanupStatus == ArticleCleanupStatus.Completed)
+                .Where(article => !article.IsProbablyNonArticle)
+                .Where(article => article.CleanedContentText != null)
+                .Where(article =>
+                    article.EmbeddingStatus == ArticleEmbeddingStatus.Pending
+                    || article.EmbeddingStatus == ArticleEmbeddingStatus.Failed
+                    || article.EmbeddingStatus == ArticleEmbeddingStatus.Stale
+                    || article.EmbeddingStatus == ArticleEmbeddingStatus.Running && article.EmbeddingStartedAt != null && article.EmbeddingStartedAt < runningExpiredBefore
+                    || article.EmbeddingStatus == ArticleEmbeddingStatus.Completed && (article.EmbeddingModel != embeddingModel || article.EmbeddingTextHash == null || article.EmbeddedAt == null))
+                .OrderBy(article => article.ScrapedAt)
+                .Select(article => article.Id)
+                .Take(options.Value.BatchSize)
+                .ToArrayAsync(cancellationToken);
+
+            if (eligibleIds.Length == 0)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return [];
+            }
+
+            await dbContext.Articles
+                .Where(article => eligibleIds.Contains(article.Id))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(article => article.EmbeddingStatus, ArticleEmbeddingStatus.Running)
+                    .SetProperty(article => article.EmbeddingStartedAt, claimStartedAt)
+                    .SetProperty(article => article.EmbeddingRunId, runId)
+                    .SetProperty(article => article.EmbeddingError, (string?)null), cancellationToken);
+
+            var claimedArticles = await dbContext.Articles
+                .Where(article => article.EmbeddingRunId == runId)
+                .OrderBy(article => article.ScrapedAt)
+                .ToListAsync(cancellationToken);
+
             await transaction.CommitAsync(cancellationToken);
-            return [];
-        }
-
-        await dbContext.Articles
-            .Where(article => eligibleIds.Contains(article.Id))
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(article => article.EmbeddingStatus, ArticleEmbeddingStatus.Running)
-                .SetProperty(article => article.EmbeddingStartedAt, claimStartedAt)
-                .SetProperty(article => article.EmbeddingRunId, runId)
-                .SetProperty(article => article.EmbeddingError, (string?)null), cancellationToken);
-
-        var claimedArticles = await dbContext.Articles
-            .Where(article => article.EmbeddingRunId == runId)
-            .OrderBy(article => article.ScrapedAt)
-            .ToListAsync(cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
-        return claimedArticles;
+            return claimedArticles;
+        });
     }
 
     private async Task<EmbedArticleResult> EmbedArticleAsync(Article article, string configuredModel, CancellationToken cancellationToken)

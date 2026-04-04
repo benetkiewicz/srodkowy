@@ -102,46 +102,51 @@ public sealed class ArticleCleanupService(
         string cleanupProcessor,
         CancellationToken cancellationToken)
     {
-        var runId = Guid.NewGuid();
-        var claimStartedAt = DateTimeOffset.UtcNow;
-        var runningExpiredBefore = claimStartedAt - RunningTimeout;
+        var strategy = dbContext.Database.CreateExecutionStrategy();
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
-        var eligibleIds = await dbContext.Articles
-            .Where(article => article.ScrapedAt >= cutoff)
-            .Where(article =>
-                article.CleanupStatus == ArticleCleanupStatus.Pending
-                || article.CleanupStatus == ArticleCleanupStatus.Failed
-                || article.CleanupStatus == ArticleCleanupStatus.Stale
-                || article.CleanupStatus == ArticleCleanupStatus.Running && article.CleanupStartedAt != null && article.CleanupStartedAt < runningExpiredBefore
-                || article.CleanupStatus == ArticleCleanupStatus.Completed && (article.CleanupProcessor != cleanupProcessor || article.CleanupInputHash == null))
-            .OrderBy(article => article.ScrapedAt)
-            .Select(article => article.Id)
-            .Take(options.Value.BatchSize)
-            .ToArrayAsync(cancellationToken);
-
-        if (eligibleIds.Length == 0)
+        return await strategy.ExecuteAsync(async () =>
         {
+            var runId = Guid.NewGuid();
+            var claimStartedAt = DateTimeOffset.UtcNow;
+            var runningExpiredBefore = claimStartedAt - RunningTimeout;
+
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+            var eligibleIds = await dbContext.Articles
+                .Where(article => article.ScrapedAt >= cutoff)
+                .Where(article =>
+                    article.CleanupStatus == ArticleCleanupStatus.Pending
+                    || article.CleanupStatus == ArticleCleanupStatus.Failed
+                    || article.CleanupStatus == ArticleCleanupStatus.Stale
+                    || article.CleanupStatus == ArticleCleanupStatus.Running && article.CleanupStartedAt != null && article.CleanupStartedAt < runningExpiredBefore
+                    || article.CleanupStatus == ArticleCleanupStatus.Completed && (article.CleanupProcessor != cleanupProcessor || article.CleanupInputHash == null))
+                .OrderBy(article => article.ScrapedAt)
+                .Select(article => article.Id)
+                .Take(options.Value.BatchSize)
+                .ToArrayAsync(cancellationToken);
+
+            if (eligibleIds.Length == 0)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return [];
+            }
+
+            await dbContext.Articles
+                .Where(article => eligibleIds.Contains(article.Id))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(article => article.CleanupStatus, ArticleCleanupStatus.Running)
+                    .SetProperty(article => article.CleanupStartedAt, claimStartedAt)
+                    .SetProperty(article => article.CleanupRunId, runId)
+                    .SetProperty(article => article.CleanupError, (string?)null), cancellationToken);
+
+            var claimedArticles = await dbContext.Articles
+                .Where(article => article.CleanupRunId == runId)
+                .OrderBy(article => article.ScrapedAt)
+                .ToListAsync(cancellationToken);
+
             await transaction.CommitAsync(cancellationToken);
-            return [];
-        }
-
-        await dbContext.Articles
-            .Where(article => eligibleIds.Contains(article.Id))
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(article => article.CleanupStatus, ArticleCleanupStatus.Running)
-                .SetProperty(article => article.CleanupStartedAt, claimStartedAt)
-                .SetProperty(article => article.CleanupRunId, runId)
-                .SetProperty(article => article.CleanupError, (string?)null), cancellationToken);
-
-        var claimedArticles = await dbContext.Articles
-            .Where(article => article.CleanupRunId == runId)
-            .OrderBy(article => article.ScrapedAt)
-            .ToListAsync(cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
-        return claimedArticles;
+            return claimedArticles;
+        });
     }
 
     private async Task<CleanupArticleResult> CleanupArticleAsync(Article article, string cleanupProcessor, CancellationToken cancellationToken)
