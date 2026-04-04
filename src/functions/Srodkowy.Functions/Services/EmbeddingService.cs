@@ -134,10 +134,22 @@ public sealed class EmbeddingService(
 
     private async Task<EmbedArticleResult> EmbedArticleAsync(Article article, string configuredModel, CancellationToken cancellationToken)
     {
+        using var activity = ActivitySource.StartActivity("article.embedding.process", ActivityKind.Internal);
+        activity?.SetTag("article.id", article.Id.ToString());
+        activity?.SetTag("article.url", article.Url);
+        activity?.SetTag("source.id", article.SourceId.ToString());
+        activity?.SetTag("embedding.run_id", article.EmbeddingRunId?.ToString());
+        activity?.SetTag("embedding.model", configuredModel);
+
         var cleanedText = article.CleanedContentText;
 
         if (string.IsNullOrWhiteSpace(cleanedText))
         {
+            logger.LogInformation(
+                "Embedding skipped for article {ArticleId} because cleaned text is empty",
+                article.Id);
+
+            activity?.SetTag("embedding.skipped", true);
             article.EmbeddingRunId = null;
             article.EmbeddingStatus = ArticleEmbeddingStatus.Pending;
             return EmbedArticleResult.Skipped;
@@ -145,17 +157,28 @@ public sealed class EmbeddingService(
 
         var embeddingInput = ArticlePreparationText.BuildEmbeddingInput(article.Title, cleanedText, options.Value.MaxInputCharacters);
         var embeddingHash = ArticlePreparationText.ComputeHash(embeddingInput);
+        activity?.SetTag("embedding.input_chars", embeddingInput.Length);
 
         if (article.EmbeddingStatus == ArticleEmbeddingStatus.Completed
             && article.EmbeddingModel == configuredModel
             && string.Equals(article.EmbeddingTextHash, embeddingHash, StringComparison.Ordinal)
             && article.Embedding is not null)
         {
+            logger.LogInformation(
+                "Embedding skipped for article {ArticleId} because hash and model already match current embedding",
+                article.Id);
+
+            activity?.SetTag("embedding.skipped", true);
             article.EmbeddingRunId = null;
             return EmbedArticleResult.Skipped;
         }
 
         var embeddingGenerator = serviceProvider.GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>();
+        logger.LogInformation(
+            "Calling embedding model {EmbeddingModel} for article {ArticleId} with {InputChars} chars",
+            configuredModel,
+            article.Id,
+            embeddingInput.Length);
         var embedding = await embeddingGenerator.GenerateVectorAsync(embeddingInput, cancellationToken: cancellationToken);
 
         article.Embedding = new SqlVector<float>(embedding);
@@ -165,6 +188,13 @@ public sealed class EmbeddingService(
         article.EmbeddingRunId = null;
         article.EmbeddingError = null;
         article.EmbeddingTextHash = embeddingHash;
+
+        activity?.SetTag("embedding.completed", true);
+        logger.LogInformation(
+            "Embedding completed for article {ArticleId} run {EmbeddingRunId} model {EmbeddingModel}",
+            article.Id,
+            article.EmbeddingRunId,
+            configuredModel);
 
         return EmbedArticleResult.Completed;
     }

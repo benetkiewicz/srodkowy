@@ -27,18 +27,17 @@ builder.Logging.AddOpenTelemetry(logging =>
     logging.IncludeScopes = true;
 });
 
-builder.Services.ConfigureOpenTelemetryTracerProvider(tracing =>
-{
-    tracing.AddSource(
-        ObservabilityOptions.ArticlePreparationSourceName,
-        ObservabilityOptions.CleanupChatSourceName,
-        ObservabilityOptions.ChatSourceName,
-        ObservabilityOptions.EmbeddingSourceName);
-    tracing.AddHttpClientInstrumentation();
-    tracing.AddSqlClientInstrumentation();
-});
-
 builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing.AddSource(
+            ObservabilityOptions.ArticlePreparationSourceName,
+            ObservabilityOptions.CleanupChatSourceName,
+            ObservabilityOptions.ChatSourceName,
+            ObservabilityOptions.EmbeddingSourceName);
+        tracing.AddHttpClientInstrumentation();
+        tracing.AddSqlClientInstrumentation();
+    })
     .UseFunctionsWorkerDefaults()
     .UseAzureMonitorExporter();
 

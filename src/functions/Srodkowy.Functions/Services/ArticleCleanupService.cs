@@ -151,20 +151,44 @@ public sealed class ArticleCleanupService(
 
     private async Task<CleanupArticleResult> CleanupArticleAsync(Article article, string cleanupProcessor, CancellationToken cancellationToken)
     {
+        using var activity = ActivitySource.StartActivity("article.cleanup.process", ActivityKind.Internal);
+        activity?.SetTag("article.id", article.Id.ToString());
+        activity?.SetTag("article.url", article.Url);
+        activity?.SetTag("source.id", article.SourceId.ToString());
+        activity?.SetTag("cleanup.run_id", article.CleanupRunId?.ToString());
+        activity?.SetTag("cleanup.model", openAiOptions.Value.CleanupModel);
+
         var normalization = ArticleCleanupHeuristics.NormalizeForCleanup(article.ContentMarkdown, options.Value.MaxInputCharacters);
         var cleanupInput = ArticlePreparationText.BuildCleanupInput(article.Title, normalization.Markdown);
         var cleanupHash = ArticlePreparationText.ComputeHash(cleanupInput);
+
+        logger.LogInformation(
+            "Cleanup starting for article {ArticleId} source {SourceId} run {CleanupRunId} model {CleanupModel} normalizedChars {NormalizedChars}",
+            article.Id,
+            article.SourceId,
+            article.CleanupRunId,
+            openAiOptions.Value.CleanupModel,
+            normalization.Markdown.Length);
+
+        activity?.SetTag("cleanup.normalized_input_chars", normalization.Markdown.Length);
+        activity?.SetTag("cleanup.flags_count", normalization.Flags.Count);
 
         if (article.CleanupStatus == ArticleCleanupStatus.Completed
             && article.CleanupInputHash == cleanupHash
             && string.Equals(article.CleanupProcessor, cleanupProcessor, StringComparison.Ordinal))
         {
+            logger.LogInformation(
+                "Cleanup skipped for article {ArticleId} because content hash and processor match current state",
+                article.Id);
+
+            activity?.SetTag("cleanup.skipped", true);
             article.CleanupRunId = null;
             article.CleanupStatus = ArticleCleanupStatus.Completed;
             return CleanupArticleResult.Skipped;
         }
 
         var llmResult = await CleanupWithLlmAsync(article.Title, normalization.Markdown, cancellationToken);
+        activity?.SetTag("cleanup.is_non_article", llmResult.IsProbablyNonArticle);
         var cleanedText = string.IsNullOrWhiteSpace(llmResult.CleanedText)
             ? null
             : ArticleCleanupHeuristics.AnalyzeOutput(article.Title, llmResult.CleanedText, options.Value.MinCleanedLength);
@@ -212,6 +236,19 @@ public sealed class ArticleCleanupService(
         article.NeedsReview = !llmResult.IsProbablyNonArticle && cleanedText!.NeedsReview;
         article.IsProbablyNonArticle = llmResult.IsProbablyNonArticle;
 
+        activity?.SetTag("cleanup.quality_score", article.QualityScore);
+        activity?.SetTag("cleanup.needs_review", article.NeedsReview);
+        activity?.SetTag("cleanup.output_chars", article.CleanedContentText?.Length ?? 0);
+
+        logger.LogInformation(
+            "Cleanup completed for article {ArticleId} run {CleanupRunId} nonArticle {IsProbablyNonArticle} needsReview {NeedsReview} qualityScore {QualityScore} outputChars {OutputChars}",
+            article.Id,
+            article.CleanupRunId,
+            article.IsProbablyNonArticle,
+            article.NeedsReview,
+            article.QualityScore,
+            article.CleanedContentText?.Length ?? 0);
+
         if (llmResult.IsProbablyNonArticle)
         {
             article.Embedding = null;
@@ -246,7 +283,17 @@ public sealed class ArticleCleanupService(
     {
         var cleanupClient = serviceProvider.GetRequiredKeyedService<IChatClient>("cleanup");
         var prompt = BuildCleanupPrompt(title, normalizedMarkdown);
+        logger.LogInformation(
+            "Calling cleanup model {CleanupModel} for title {Title} with {InputChars} chars",
+            openAiOptions.Value.CleanupModel,
+            title,
+            normalizedMarkdown.Length);
         var response = await cleanupClient.GetResponseAsync<LlmCleanupResponse>(prompt, cancellationToken: cancellationToken);
+        logger.LogInformation(
+            "Cleanup model {CleanupModel} returned nonArticle {IsProbablyNonArticle} outputChars {OutputChars}",
+            openAiOptions.Value.CleanupModel,
+            response.Result.IsProbablyNonArticle,
+            response.Result.CleanedText?.Length ?? 0);
         return response.Result;
     }
 
