@@ -96,7 +96,7 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
   name: 'appsettings'
   properties: {
     Admin__Migrations__Enabled: string(adminMigrationsEnabled)
-    APPLICATIONINSIGHTS_AUTHENTICATION_STRING: 'ClientId=${userAssignedIdentityClientId};Authorization=AAD'
+    APPLICATIONINSIGHTS_AUTHENTICATION_STRING: 'Authorization=AAD;ClientId=${userAssignedIdentityClientId}'
     APPLICATIONINSIGHTS_CONNECTION_STRING: appInsightsConnectionString
     AzureWebJobsStorage__accountName: storageAccountName
     AzureWebJobsStorage__blobServiceUri: 'https://${storageAccountName}.blob.${environment().suffixes.storage}'
