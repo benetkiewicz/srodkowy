@@ -153,16 +153,16 @@ public sealed class IngestionService(
 
                 var plainText = ArticleContentConverter.ToPlainText(page.Markdown);
 
-                if (plainText.Length < options.Value.MinContentLength)
-                {
-                    continue;
-                }
-
                 var title = string.IsNullOrWhiteSpace(page.Title)
                     ? ArticleContentConverter.ExtractTitle(page.Markdown)
                     : page.Title.Trim();
 
                 if (string.IsNullOrWhiteSpace(title))
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(page.Markdown) && string.IsNullOrWhiteSpace(plainText))
                 {
                     continue;
                 }

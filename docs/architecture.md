@@ -6,16 +6,18 @@
 
 ## Current Status
 
-Phase 1 is implemented locally.
+Stage 0 is verified in Azure dev, and the next backend slice now includes article preparation.
 
-- Azure Functions isolated worker solution bootstrapped under `src/functions`
-- EF Core migrations wired for SQL Server / Azure SQL
+- Azure Functions isolated worker solution runs on `.NET 10` under `src/functions`
+- EF Core 10 migrations are wired for SQL Server 2025 / Azure SQL
+- OpenTelemetry exports host and worker telemetry to Azure Monitor
 - Curated source list seeded into the database
 - Firecrawl-backed raw ingestion working through manual HTTP triggers
-- Raw articles and ingestion runs persisted in SQL Server Express
+- Raw articles and ingestion runs persisted in SQL Server Developer 2025 locally and Azure SQL in cloud
+- Manual article-cleanup and embedding-preparation endpoints are implemented in the backend
 - Bicep and GitHub Actions scaffolding added for Azure deployment into `rg-srodkowy-pc`
 
-The following remain target-state only for now: Durable orchestration, embeddings, clustering, synthesis, edition publishing, and read-side content API endpoints.
+The following remain target-state only for now: clustering, synthesis, edition publishing, Durable orchestration, and read-side content API endpoints.
 
 ## Current Deployment Model
 
@@ -43,7 +45,7 @@ This model avoids VNet, private endpoints, ACR, and Container Apps for the first
 | Layer | Technology |
 |---|---|
 | Frontend | Astro 5 + React islands + Tailwind CSS 4 |
-| Backend | C# / .NET 8, Azure Functions (isolated worker) |
+| Backend | C# / .NET 10, Azure Functions (isolated worker) |
 | Orchestration | Azure Durable Functions |
 | Database | Azure SQL Database |
 | LLM | OpenAI API (GPT-4o for synthesis, text-embedding-3-small for clustering) |
@@ -82,7 +84,7 @@ srodkowy/
 
 ## Pipeline Flow
 
-### Current Phase 1 Flow
+### Current Flow
 
 - Manual HTTP trigger starts ingestion for all active sources or one specific source
 - For each source, the backend scrapes a discovery page with Firecrawl `links` format
@@ -90,6 +92,11 @@ srodkowy/
 - Candidate article pages are scraped individually with Firecrawl `markdown` format
 - The backend extracts title, plain text, markdown, publish date, and metadata JSON
 - Raw articles are deduplicated by URL and stored in `Articles`
+- Raw article bodies then pass through an article-preparation stage:
+  - all scraped articles go through LLM-first cleanup/extraction
+  - a lightweight deterministic normalization pass removes exact duplicate blocks and normalizes input before the LLM call
+  - cleanup status uses `pending/running/completed/failed/stale` so articles are not sent twice for the same content version
+  - embeddings are generated from `Title + CleanedContentText`, not raw scraped text
 - Each run is tracked in `IngestionRuns`
 - Requests are processed sequentially and paced to stay within Firecrawl free-plan `/scrape` limits
 - Cloud deployments apply EF migrations through a dedicated admin-only HTTP function after code publish
@@ -107,15 +114,22 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 - Stores raw articles in Azure SQL Database
 - Deduplicates by URL
 
-#### Step 2: Clustering
+#### Step 2: Article Preparation
 
-- Generates embeddings for all new articles using OpenAI `text-embedding-3-small`
+- Runs a lightweight normalization pass on raw markdown
+- Sends every scraped article through an LLM cleanup/extraction prompt keyed by the article title
+- Stores `CleanedContentText`, cleanup status, flags, quality score, and non-article classification hints on the `Articles` row
+- Uses `running` claim semantics to avoid duplicate cleanup or embedding work in overlapping runs
+- Generates embeddings for prepared articles using OpenAI `text-embedding-3-small`
+
+#### Step 3: Clustering
+
 - Computes cosine similarity between article embeddings
 - Groups articles into event clusters using agglomerative clustering
 - Filters: keeps only clusters where both left AND right camp sources are represented
 - Ranks clusters by: number of sources, camp balance, narrative divergence
 
-#### Step 3: Synthesis
+#### Step 4: Synthesis
 
 - For each qualifying cluster, sends article texts to GPT-4o with a structured prompt
 - Generates:
@@ -126,7 +140,7 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 - Stores as a Story with associated StorySides in Azure SQL Database
 - Creates an Edition record linking all stories for this cycle
 
-#### Step 4: Publish
+#### Step 5: Publish
 
 - Marks the edition as `live` in the database
 - Triggers GitHub Actions workflow via repository dispatch
@@ -143,6 +157,8 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 |---|---|
 | `POST /api/ingestion/run` | Run ingestion for all active sources |
 | `POST /api/ingestion/run/{sourceId}` | Run ingestion for a specific source |
+| `POST /api/ops/articles/cleanup/run` | Run LLM-first article cleanup / preparation |
+| `POST /api/ops/articles/embeddings/run` | Generate embeddings from prepared article text |
 | `POST /api/ops/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
 
 ### Target Content API
@@ -160,7 +176,7 @@ These target read endpoints will serve two consumers:
 
 ## Database Schema
 
-The target database is Azure SQL Database, with local development using SQL Server Express. The current phase-1 schema is SQL Server-compatible and is managed with EF Core migrations.
+The target database is Azure SQL Database, with local development using SQL Server Developer 2025. The current schema is SQL Server 2025-compatible and is managed with EF Core migrations.
 
 ### Current Schema
 
@@ -183,6 +199,26 @@ The target database is Azure SQL Database, with local development using SQL Serv
 | Url | nvarchar(1000) | Original article URL (unique) |
 | ContentMarkdown | nvarchar(max) | Raw article markdown from Firecrawl |
 | ContentText | nvarchar(max) | Normalized plain text |
+| CleanedContentText | nvarchar(max) null | LLM-cleaned article body used by downstream AI stages |
+| CleanupStatus | nvarchar(30) | `pending`, `running`, `completed`, `failed`, `stale` |
+| CleanedAt | datetimeoffset null | When cleanup last ran |
+| CleanupStartedAt | datetimeoffset null | When the current/last cleanup claim started |
+| CleanupRunId | uniqueidentifier null | Claim token for the cleanup batch that owns the row |
+| CleanupProcessor | nvarchar(100) null | Cleanup pipeline version and model id |
+| CleanupError | nvarchar(max) null | Cleanup failure detail |
+| CleanupInputHash | nvarchar(64) null | Hash of title + raw markdown for rerun detection |
+| CleanupFlagsJson | nvarchar(max) | JSON array of cleanup / classification flags |
+| QualityScore | int | Cleanup validation confidence score |
+| NeedsReview | bit | Whether the cleanup result should be reviewed before relying on it |
+| IsProbablyNonArticle | bit | Whether the page looks like low-value or non-article content |
+| Embedding | vector(1536) null | Native Azure SQL / SQL Server vector for clustering |
+| EmbeddingModel | nvarchar(100) null | Embedding model id |
+| EmbeddingStatus | nvarchar(30) | `pending`, `running`, `completed`, `failed`, `stale` |
+| EmbeddedAt | datetimeoffset null | When embedding last ran |
+| EmbeddingStartedAt | datetimeoffset null | When the current/last embedding claim started |
+| EmbeddingRunId | uniqueidentifier null | Claim token for the embedding batch that owns the row |
+| EmbeddingError | nvarchar(max) null | Embedding failure detail |
+| EmbeddingTextHash | nvarchar(64) null | Hash of title + cleaned text for rerun detection |
 | PublishedAt | datetimeoffset | Article publish date |
 | ScrapedAt | datetimeoffset | When we scraped it |
 | MetadataJson | nvarchar(max) | Firecrawl metadata payload |
@@ -241,9 +277,10 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 
 ## Implementation Phasing
 
-1. **Phase 1: Raw ingestion** — Implemented locally with Azure Functions, SQL Server Express, EF Core migrations, seeded sources, Firecrawl scraping, and deduplicated raw article persistence.
-2. **Phase 2: Embeddings and clustering** — Generate embeddings with OpenAI, store them in Azure SQL `vector(1536)` columns, and form cross-camp candidate story clusters.
-3. **Phase 3: Synthesis and content API** — Generate story syntheses, persist editions, stories, and story sides, and expose the read API for the frontend build.
+1. **Phase 1: Raw ingestion** — Implemented with Azure Functions, SQL Server / Azure SQL, EF Core migrations, seeded sources, Firecrawl scraping, and deduplicated raw article persistence.
+2. **Phase 2: Article preparation and embeddings** — Run all scraped articles through LLM-first cleanup/extraction, classify probable non-articles, and persist native Azure SQL `vector(1536)` embeddings from cleaned text.
+3. **Phase 3: Clustering** — Form cross-camp candidate story clusters from prepared article embeddings.
+4. **Phase 4: Synthesis and content API** — Generate story syntheses, persist editions, stories, and story sides, and expose the read API for the frontend build.
 
 ## Key Design Decisions
 
@@ -251,7 +288,7 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 
 2. **React islands for interactivity** — Only marker tooltips and side-panel reveals are hydrated. Everything else is static HTML + Tailwind.
 
-3. **Durable Functions orchestration** — The 4-step pipeline uses fan-out/fan-in for parallel scraping, automatic retries, and status tracking.
+3. **Durable Functions orchestration** — The 5-step pipeline uses fan-out/fan-in for parallel scraping, preparation, clustering, synthesis, and publishing with retries and status tracking.
 
 4. **Firecrawl for scraping** — Avoids maintaining browser infrastructure. In phase 1 it is called sequentially and paced to fit Firecrawl free-plan `/scrape` limits.
 
@@ -268,6 +305,7 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | Setting | Description |
 |---|---|
 | `OpenAi:ApiKey` | OpenAI API secret key |
+| `OpenAi:CleanupModel` | Cleanup/extraction model name (default: `gpt-4o`) |
 | `OpenAi:ChatModel` | Chat model name (default: `gpt-4o`) |
 | `OpenAi:EmbeddingModel` | Embedding model name (default: `text-embedding-3-small`) |
 | `Firecrawl:ApiKey` | Firecrawl API key |
@@ -277,12 +315,18 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `Admin:Migrations:Enabled` | Enables the admin migration HTTP endpoint |
 | `Ingestion:MaxCandidateLinksPerSource` | Max filtered article links per source |
 | `Ingestion:MaxArticlesPerSource` | Max article page scrapes per source |
-| `Ingestion:MinContentLength` | Minimum normalized article text length |
+| `Cleanup:BatchSize` | Max articles to clean in one manual run |
+| `Cleanup:LookbackHours` | Article lookback window for cleanup selection |
+| `Cleanup:MaxInputCharacters` | Max normalized markdown length sent to LLM cleanup |
+| `Cleanup:MinCleanedLength` | Minimum cleaned-body length before the output is flagged for review |
+| `Embedding:BatchSize` | Max articles to embed in one manual run |
+| `Embedding:LookbackHours` | Article lookback window for embedding selection |
+| `Embedding:MaxInputCharacters` | Max cleaned-text input length used for embedding generation |
 | `Pipeline:CronSchedule` | Timer trigger CRON (default: `0 0 5,17 * * *`) |
 | `GitHub:Token` | For triggering frontend rebuild |
 | `GitHub:RepoOwner` | Repository owner |
 | `GitHub:RepoName` | Repository name |
 
-Local development can use SQL Server Express with Integrated Security, for example: `Server=.\SQLEXPRESS;Database=Srodkowy;Integrated Security=True;TrustServerCertificate=True;`.
+Local development can use SQL Server Developer 2025 with Integrated Security, for example: `Server=localhost\MSSQLSERVER;Database=Srodkowy;Integrated Security=True;Encrypt=True;TrustServerCertificate=True;Application Name=Srodkowy.Functions;`.
 
 In Azure, the backend uses the same logical keys, but configuration is supplied through Function App settings, with secrets coming from Key Vault references and `Database:ConnectionString` using managed identity authentication.

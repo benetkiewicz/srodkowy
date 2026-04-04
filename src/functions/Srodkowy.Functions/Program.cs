@@ -29,7 +29,11 @@ builder.Logging.AddOpenTelemetry(logging =>
 
 builder.Services.ConfigureOpenTelemetryTracerProvider(tracing =>
 {
-    tracing.AddSource(ObservabilityOptions.ChatSourceName, ObservabilityOptions.EmbeddingSourceName);
+    tracing.AddSource(
+        ObservabilityOptions.ArticlePreparationSourceName,
+        ObservabilityOptions.CleanupChatSourceName,
+        ObservabilityOptions.ChatSourceName,
+        ObservabilityOptions.EmbeddingSourceName);
     tracing.AddHttpClientInstrumentation();
     tracing.AddSqlClientInstrumentation();
 });
@@ -62,10 +66,6 @@ builder.Services
             options.MaxArticlesPerSource = maxArticlesPerSource;
         }
 
-        if (int.TryParse(GetSetting(builder.Configuration, "Ingestion:MinContentLength"), out var minContentLength))
-        {
-            options.MinContentLength = minContentLength;
-        }
     });
 
 builder.Services
@@ -73,8 +73,55 @@ builder.Services
     .Configure(options =>
     {
         options.ApiKey = GetSetting(builder.Configuration, "OpenAi:ApiKey") ?? string.Empty;
+        options.CleanupModel = GetSetting(builder.Configuration, "OpenAi:CleanupModel") ?? OpenAiOptions.DefaultCleanupModel;
         options.ChatModel = GetSetting(builder.Configuration, "OpenAi:ChatModel") ?? OpenAiOptions.DefaultChatModel;
         options.EmbeddingModel = GetSetting(builder.Configuration, "OpenAi:EmbeddingModel") ?? OpenAiOptions.DefaultEmbeddingModel;
+    });
+
+builder.Services
+    .AddOptions<CleanupOptions>()
+    .Configure(options =>
+    {
+        if (int.TryParse(GetSetting(builder.Configuration, "Cleanup:BatchSize"), out var batchSize))
+        {
+            options.BatchSize = batchSize;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Cleanup:LookbackHours"), out var lookbackHours))
+        {
+            options.LookbackHours = lookbackHours;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Cleanup:MaxInputCharacters"), out var maxInputCharacters))
+        {
+            options.MaxInputCharacters = maxInputCharacters;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Cleanup:MinCleanedLength"), out var minCleanedLength))
+        {
+            options.MinCleanedLength = minCleanedLength;
+        }
+
+    });
+
+builder.Services
+    .AddOptions<EmbeddingOptions>()
+    .Configure(options =>
+    {
+        if (int.TryParse(GetSetting(builder.Configuration, "Embedding:BatchSize"), out var batchSize))
+        {
+            options.BatchSize = batchSize;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Embedding:LookbackHours"), out var lookbackHours))
+        {
+            options.LookbackHours = lookbackHours;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Embedding:MaxInputCharacters"), out var maxInputCharacters))
+        {
+            options.MaxInputCharacters = maxInputCharacters;
+        }
     });
 
 builder.Services
@@ -109,6 +156,8 @@ builder.Services
 
 builder.Services.AddOpenAiClients();
 builder.Services.AddScoped<IngestionService>();
+builder.Services.AddScoped<ArticleCleanupService>();
+builder.Services.AddScoped<EmbeddingService>();
 
 builder.Build().Run();
 

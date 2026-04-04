@@ -9,6 +9,18 @@ public static class OpenAiServiceCollectionExtensions
 {
     public static IServiceCollection AddOpenAiClients(this IServiceCollection services)
     {
+        services.AddKeyedSingleton<IChatClient>("cleanup", (serviceProvider, _) =>
+        {
+            var options = serviceProvider.GetRequiredService<IOptions<OpenAiOptions>>().Value;
+            var observability = serviceProvider.GetRequiredService<IOptions<ObservabilityOptions>>().Value;
+
+            return new ChatClientBuilder(new OpenAI.Chat.ChatClient(options.CleanupModel, GetRequiredApiKey(options)).AsIChatClient())
+                .UseOpenTelemetry(
+                    sourceName: ObservabilityOptions.CleanupChatSourceName,
+                    configure: settings => settings.EnableSensitiveData = observability.EnableSensitiveData)
+                .Build();
+        });
+
         services.AddSingleton<IChatClient>(serviceProvider =>
         {
             var options = serviceProvider.GetRequiredService<IOptions<OpenAiOptions>>().Value;

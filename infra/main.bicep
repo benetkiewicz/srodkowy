@@ -8,7 +8,16 @@ param firecrawlTimeoutSeconds int = 60
 param firecrawlRequestsPerMinute int = 10
 param ingestionMaxCandidateLinksPerSource int = 25
 param ingestionMaxArticlesPerSource int = 10
-param ingestionMinContentLength int = 600
+param cleanupBatchSize int = 25
+param cleanupLookbackHours int = 96
+param cleanupMaxInputCharacters int = 24000
+param cleanupMinCleanedLength int = 320
+param embeddingBatchSize int = 25
+param embeddingLookbackHours int = 96
+param embeddingMaxInputCharacters int = 12000
+param openAiCleanupModel string = 'gpt-4o'
+param openAiChatModel string = 'gpt-4o'
+param openAiEmbeddingModel string = 'text-embedding-3-small'
 param adminMigrationsEnabled bool = true
 param maximumInstanceCount int = 100
 param instanceMemoryMb int = 2048
@@ -85,6 +94,7 @@ module sql 'modules/sql.bicep' = {
 
 var databaseConnectionString = 'Server=tcp:${sql.outputs.serverFqdn},1433;Database=${sql.outputs.databaseName};Encrypt=True;TrustServerCertificate=False;Authentication=Active Directory Managed Identity;User Id=${identity.outputs.clientId};'
 var firecrawlApiKeyReference = '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=firecrawl-api-key)'
+var openAiApiKeyReference = '@Microsoft.KeyVault(VaultName=${keyVault.outputs.name};SecretName=openai-api-key)'
 
 module functions 'modules/functions-flex.bicep' = {
   name: 'functions'
@@ -92,8 +102,15 @@ module functions 'modules/functions-flex.bicep' = {
     adminMigrationsEnabled: adminMigrationsEnabled
     appInsightsConnectionString: monitoring.outputs.applicationInsightsConnectionString
     appInsightsName: monitoring.outputs.applicationInsightsName
+    cleanupBatchSize: cleanupBatchSize
+    cleanupLookbackHours: cleanupLookbackHours
+    cleanupMaxInputCharacters: cleanupMaxInputCharacters
+    cleanupMinCleanedLength: cleanupMinCleanedLength
     databaseConnectionString: databaseConnectionString
     deploymentContainerName: storage.outputs.deploymentContainerName
+    embeddingBatchSize: embeddingBatchSize
+    embeddingLookbackHours: embeddingLookbackHours
+    embeddingMaxInputCharacters: embeddingMaxInputCharacters
     firecrawlApiKeyReference: firecrawlApiKeyReference
     firecrawlBaseUrl: firecrawlBaseUrl
     firecrawlRequestsPerMinute: firecrawlRequestsPerMinute
@@ -102,10 +119,13 @@ module functions 'modules/functions-flex.bicep' = {
     hostingPlanName: hostingPlanName
     ingestionMaxArticlesPerSource: ingestionMaxArticlesPerSource
     ingestionMaxCandidateLinksPerSource: ingestionMaxCandidateLinksPerSource
-    ingestionMinContentLength: ingestionMinContentLength
     instanceMemoryMb: instanceMemoryMb
     location: location
     maximumInstanceCount: maximumInstanceCount
+    openAiApiKeyReference: openAiApiKeyReference
+    openAiCleanupModel: openAiCleanupModel
+    openAiChatModel: openAiChatModel
+    openAiEmbeddingModel: openAiEmbeddingModel
     storageAccountName: storage.outputs.accountName
     storagePrimaryBlobEndpoint: storage.outputs.primaryBlobEndpoint
     tags: tags

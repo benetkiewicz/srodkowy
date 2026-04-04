@@ -5,7 +5,7 @@ This document provides development guidelines for AI agents working in the Środ
 ## Technology Stack
 
 - **Frontend:** Astro 5 + React islands + Tailwind CSS 4
-- **Backend:** C# / .NET 8, Azure Functions (isolated worker model)
+- **Backend:** C# / .NET 10, Azure Functions (isolated worker model)
 - **Orchestration:** Azure Durable Functions
 - **Database:** Azure SQL Database
 - **LLM:** OpenAI API (GPT-4o, text-embedding-3-small)
@@ -19,7 +19,7 @@ This document provides development guidelines for AI agents working in the Środ
 
 ```
 src/frontend/              # Astro app (SSG, React islands, Tailwind)
-src/functions/             # .NET 8 Azure Functions solution
+src/functions/             # .NET 10 Azure Functions solution
 infra/                     # Bicep IaC templates
 tests/e2e/                 # Playwright E2E tests
 tests/integration/         # Pipeline integration tests
@@ -61,7 +61,7 @@ curl -X POST http://localhost:7071/api/ingestion/run
 curl -X POST http://localhost:7071/api/ingestion/run/<source-guid>
 ```
 
-Current backend scope is raw ingestion only. Clustering, synthesis, read-side content API, and Durable orchestration are planned but not implemented yet.
+Current backend scope includes raw ingestion plus article preparation (LLM-first cleanup/extraction, cleanup classification, and embedding preparation). Clustering, synthesis, read-side content API, and Durable orchestration are planned but not implemented yet.
 
 Cloud deployment currently targets Azure Functions Flex Consumption, Azure SQL Database, and Azure Key Vault without VNet/private endpoints. EF migrations are triggered through a function-key-protected admin endpoint after deploy.
 

@@ -40,12 +40,46 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
         articleBuilder.Property(article => article.Title).HasMaxLength(500).IsRequired();
         articleBuilder.Property(article => article.ContentMarkdown).HasColumnType("nvarchar(max)").IsRequired();
         articleBuilder.Property(article => article.ContentText).HasColumnType("nvarchar(max)").IsRequired();
+        articleBuilder.Property(article => article.CleanedContentText).HasColumnType("nvarchar(max)");
+        articleBuilder.Property(article => article.CleanupStatus)
+            .HasConversion<string>()
+            .HasMaxLength(30)
+            .HasDefaultValue(ArticleCleanupStatus.Pending)
+            .IsRequired();
+        articleBuilder.Property(article => article.CleanedAt).HasColumnType("datetimeoffset");
+        articleBuilder.Property(article => article.CleanupStartedAt).HasColumnType("datetimeoffset");
+        articleBuilder.Property(article => article.CleanupRunId).HasColumnType("uniqueidentifier");
+        articleBuilder.Property(article => article.CleanupProcessor).HasMaxLength(100);
+        articleBuilder.Property(article => article.CleanupError).HasColumnType("nvarchar(max)");
+        articleBuilder.Property(article => article.CleanupInputHash).HasMaxLength(64);
+        articleBuilder.Property(article => article.CleanupFlagsJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        articleBuilder.Property(article => article.QualityScore).HasDefaultValue(0).IsRequired();
+        articleBuilder.Property(article => article.NeedsReview).HasDefaultValue(false).IsRequired();
+        articleBuilder.Property(article => article.IsProbablyNonArticle).HasDefaultValue(false).IsRequired();
+        articleBuilder.Property(article => article.Embedding).HasColumnType("vector(1536)");
+        articleBuilder.Property(article => article.EmbeddingModel).HasMaxLength(100);
+        articleBuilder.Property(article => article.EmbeddingStatus)
+            .HasConversion<string>()
+            .HasMaxLength(30)
+            .HasDefaultValue(ArticleEmbeddingStatus.Pending)
+            .IsRequired();
+        articleBuilder.Property(article => article.EmbeddedAt).HasColumnType("datetimeoffset");
+        articleBuilder.Property(article => article.EmbeddingStartedAt).HasColumnType("datetimeoffset");
+        articleBuilder.Property(article => article.EmbeddingRunId).HasColumnType("uniqueidentifier");
+        articleBuilder.Property(article => article.EmbeddingError).HasColumnType("nvarchar(max)");
+        articleBuilder.Property(article => article.EmbeddingTextHash).HasMaxLength(64);
         articleBuilder.Property(article => article.MetadataJson).HasColumnType("nvarchar(max)").IsRequired();
         articleBuilder.Property(article => article.PublishedAt).HasColumnType("datetimeoffset");
         articleBuilder.Property(article => article.ScrapedAt).HasColumnType("datetimeoffset");
         articleBuilder.HasIndex(article => article.Url).IsUnique();
         articleBuilder.HasIndex(article => article.SourceId);
         articleBuilder.HasIndex(article => article.ScrapedAt);
+        articleBuilder.HasIndex(article => article.CleanupStatus);
+        articleBuilder.HasIndex(article => new { article.CleanupStatus, article.ScrapedAt });
+        articleBuilder.HasIndex(article => article.CleanupRunId);
+        articleBuilder.HasIndex(article => article.EmbeddingStatus);
+        articleBuilder.HasIndex(article => new { article.EmbeddingStatus, article.ScrapedAt });
+        articleBuilder.HasIndex(article => article.EmbeddingRunId);
         articleBuilder.HasOne(article => article.Source)
             .WithMany(source => source.Articles)
             .HasForeignKey(article => article.SourceId)

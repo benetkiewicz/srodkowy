@@ -10,13 +10,23 @@ param deploymentContainerName string
 param appInsightsName string
 param appInsightsConnectionString string
 param databaseConnectionString string
+param cleanupBatchSize int
+param cleanupLookbackHours int
+param cleanupMaxInputCharacters int
+param cleanupMinCleanedLength int
+param embeddingBatchSize int
+param embeddingLookbackHours int
+param embeddingMaxInputCharacters int
 param firecrawlApiKeyReference string
 param firecrawlBaseUrl string
 param firecrawlTimeoutSeconds int
 param firecrawlRequestsPerMinute int
 param ingestionMaxCandidateLinksPerSource int
 param ingestionMaxArticlesPerSource int
-param ingestionMinContentLength int
+param openAiApiKeyReference string
+param openAiCleanupModel string
+param openAiChatModel string
+param openAiEmbeddingModel string
 param adminMigrationsEnabled bool
 param maximumInstanceCount int
 param instanceMemoryMb int
@@ -104,14 +114,24 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     AzureWebJobsStorage__credential: 'managedidentity'
     AzureWebJobsStorage__queueServiceUri: 'https://${storageAccountName}.queue.${environment().suffixes.storage}'
     AzureWebJobsStorage__tableServiceUri: 'https://${storageAccountName}.table.${environment().suffixes.storage}'
+    Cleanup__BatchSize: string(cleanupBatchSize)
+    Cleanup__LookbackHours: string(cleanupLookbackHours)
+    Cleanup__MaxInputCharacters: string(cleanupMaxInputCharacters)
+    Cleanup__MinCleanedLength: string(cleanupMinCleanedLength)
     Database__ConnectionString: databaseConnectionString
+    Embedding__BatchSize: string(embeddingBatchSize)
+    Embedding__LookbackHours: string(embeddingLookbackHours)
+    Embedding__MaxInputCharacters: string(embeddingMaxInputCharacters)
     Firecrawl__ApiKey: firecrawlApiKeyReference
     Firecrawl__BaseUrl: firecrawlBaseUrl
     Firecrawl__RequestsPerMinute: string(firecrawlRequestsPerMinute)
     Firecrawl__TimeoutSeconds: string(firecrawlTimeoutSeconds)
     Ingestion__MaxArticlesPerSource: string(ingestionMaxArticlesPerSource)
     Ingestion__MaxCandidateLinksPerSource: string(ingestionMaxCandidateLinksPerSource)
-    Ingestion__MinContentLength: string(ingestionMinContentLength)
+    OpenAi__ApiKey: openAiApiKeyReference
+    OpenAi__CleanupModel: openAiCleanupModel
+    OpenAi__ChatModel: openAiChatModel
+    OpenAi__EmbeddingModel: openAiEmbeddingModel
     OTEL_DOTNET_AZURE_MONITOR_ENABLE_RESOURCE_METRICS: 'true'
     OTEL_SERVICE_NAME: 'Srodkowy.Functions'
   }
