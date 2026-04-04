@@ -21,7 +21,7 @@ concurrency:
 env:
   AZURE_LOCATION: polandcentral
   AZURE_RESOURCE_GROUP: rg-srodkowy-pc
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_VERSION: '10.0.x'
   PACKAGE_OUTPUT: ${{ github.workspace }}/artifacts/functions/publish
 
 jobs:

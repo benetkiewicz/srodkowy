@@ -81,7 +81,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       }
       runtime: {
         name: 'dotnet-isolated'
-        version: '8.0'
+        version: '10.0'
       }
       scaleAndConcurrency: {
         instanceMemoryMB: instanceMemoryMb
@@ -112,6 +112,8 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     Ingestion__MaxArticlesPerSource: string(ingestionMaxArticlesPerSource)
     Ingestion__MaxCandidateLinksPerSource: string(ingestionMaxCandidateLinksPerSource)
     Ingestion__MinContentLength: string(ingestionMinContentLength)
+    OTEL_DOTNET_AZURE_MONITOR_ENABLE_RESOURCE_METRICS: 'true'
+    OTEL_SERVICE_NAME: 'Srodkowy.Functions'
   }
 }
 

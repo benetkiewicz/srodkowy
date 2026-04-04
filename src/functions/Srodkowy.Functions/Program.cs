@@ -1,14 +1,19 @@
-using Microsoft.Azure.Functions.Worker;
+using Azure.Monitor.OpenTelemetry.Exporter;
 using Microsoft.Azure.Functions.Worker.Builder;
+using Microsoft.Azure.Functions.Worker.OpenTelemetry;
+using Microsoft.Extensions.AI;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Http.Resilience;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Trace;
 using Srodkowy.Functions.Configuration;
 using Srodkowy.Functions.Persistence;
 using Srodkowy.Functions.Services;
+using Srodkowy.Functions.Services.Ai;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 var firecrawlTimeoutSeconds = GetIntSetting(builder.Configuration, "Firecrawl:TimeoutSeconds", 60);
@@ -16,9 +21,22 @@ var firecrawlRequestsPerMinute = GetIntSetting(builder.Configuration, "Firecrawl
 
 builder.ConfigureFunctionsWebApplication();
 
-builder.Services
-    .AddApplicationInsightsTelemetryWorkerService()
-    .ConfigureFunctionsApplicationInsights();
+builder.Logging.AddOpenTelemetry(logging =>
+{
+    logging.IncludeFormattedMessage = true;
+    logging.IncludeScopes = true;
+});
+
+builder.Services.ConfigureOpenTelemetryTracerProvider(tracing =>
+{
+    tracing.AddSource(ObservabilityOptions.ChatSourceName, ObservabilityOptions.EmbeddingSourceName);
+    tracing.AddHttpClientInstrumentation();
+    tracing.AddSqlClientInstrumentation();
+});
+
+builder.Services.AddOpenTelemetry()
+    .UseFunctionsWorkerDefaults()
+    .UseAzureMonitorExporter();
 
 builder.Services
     .AddOptions<FirecrawlOptions>()
@@ -50,8 +68,27 @@ builder.Services
         }
     });
 
+builder.Services
+    .AddOptions<OpenAiOptions>()
+    .Configure(options =>
+    {
+        options.ApiKey = GetSetting(builder.Configuration, "OpenAi:ApiKey") ?? string.Empty;
+        options.ChatModel = GetSetting(builder.Configuration, "OpenAi:ChatModel") ?? OpenAiOptions.DefaultChatModel;
+        options.EmbeddingModel = GetSetting(builder.Configuration, "OpenAi:EmbeddingModel") ?? OpenAiOptions.DefaultEmbeddingModel;
+    });
+
+builder.Services
+    .AddOptions<ObservabilityOptions>()
+    .Configure(options =>
+    {
+        if (bool.TryParse(GetSetting(builder.Configuration, "Observability:EnableSensitiveData"), out var enableSensitiveData))
+        {
+            options.EnableSensitiveData = enableSensitiveData;
+        }
+    });
+
 builder.Services.AddDbContextFactory<SrodkowyDbContext>(options =>
-    options.UseSqlServer(GetRequiredSetting(builder.Configuration, "Database:ConnectionString")));
+    SqlDbContextOptions.Configure(options, GetRequiredSetting(builder.Configuration, "Database:ConnectionString")));
 
 builder.Services
     .AddHttpClient<FirecrawlClient>((serviceProvider, client) =>
@@ -70,6 +107,7 @@ builder.Services
         options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds((firecrawlTimeoutSeconds * 2) + 10);
     });
 
+builder.Services.AddOpenAiClients();
 builder.Services.AddScoped<IngestionService>();
 
 builder.Build().Run();

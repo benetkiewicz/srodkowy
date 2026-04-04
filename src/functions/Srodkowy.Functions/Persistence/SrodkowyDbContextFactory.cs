@@ -20,7 +20,7 @@ public sealed class SrodkowyDbContextFactory : IDesignTimeDbContextFactory<Srodk
             ?? throw new InvalidOperationException("Missing configuration value 'Database:ConnectionString'.");
 
         var optionsBuilder = new DbContextOptionsBuilder<SrodkowyDbContext>();
-        optionsBuilder.UseSqlServer(connectionString);
+        SqlDbContextOptions.Configure(optionsBuilder, connectionString);
 
         return new SrodkowyDbContext(optionsBuilder.Options);
     }
