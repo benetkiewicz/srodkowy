@@ -28,7 +28,15 @@ The current cloud deployment model is intentionally minimal:
 - EF migrations run through a dedicated admin-only HTTP function inside the Function App
 - Local development continues to use `local.settings.json` as the primary configuration source
 
-This model avoids VNet, private endpoints, ACR, and Container Apps for the first cloud slice. The main accepted tradeoff is public-endpoint networking for Azure SQL and Key Vault.
+This model avoids VNet, private endpoints, ACR, and Container Apps for the first cloud slice.
+
+### Accepted Tradeoffs
+
+- No VNet or private endpoints in the first Azure slice
+- Azure SQL uses a public endpoint with `Allow Azure services and resources to access this server`
+- Azure Key Vault uses a public endpoint with RBAC-based secret access
+- The Function App identity holds `db_ddladmin` so migrations can run inside the app
+- EF migrations are triggered through a function-key-protected HTTP endpoint instead of a separate migration runner
 
 ## Tech Stack
 

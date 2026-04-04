@@ -65,6 +65,15 @@ Current backend scope is raw ingestion only. Clustering, synthesis, read-side co
 
 Cloud deployment currently targets Azure Functions Flex Consumption, Azure SQL Database, and Azure Key Vault without VNet/private endpoints. EF migrations are triggered through a function-key-protected admin endpoint after deploy.
 
+Operational notes for the current Azure setup:
+
+- The migration endpoint is `POST /api/ops/migrations/apply`
+- GitHub Actions authenticates to Azure with OIDC using repo secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+- The migration endpoint uses a dedicated function key stored in the repo secret `FUNC_MIGRATIONS_KEY`
+- Firecrawl is stored in Key Vault under the secret name `firecrawl-api-key`
+- Azure SQL access for the Function App identity requires a one-time database bootstrap granting `db_datareader`, `db_datawriter`, and `db_ddladmin` to `uami-func-srodkowy-pc`
+- Azure subscription provider registration is a one-time admin setup task and is not handled by GitHub Actions
+
 ### Frontend (Astro)
 
 ```bash
