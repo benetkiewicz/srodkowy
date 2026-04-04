@@ -13,8 +13,22 @@ Phase 1 is implemented locally.
 - Curated source list seeded into the database
 - Firecrawl-backed raw ingestion working through manual HTTP triggers
 - Raw articles and ingestion runs persisted in SQL Server Express
+- Bicep and GitHub Actions scaffolding added for Azure deployment into `rg-srodkowy-pc`
 
 The following remain target-state only for now: Durable orchestration, embeddings, clustering, synthesis, edition publishing, and read-side content API endpoints.
+
+## Current Deployment Model
+
+The current cloud deployment model is intentionally minimal:
+
+- Azure Functions Flex Consumption hosts the backend in `poland-central`
+- Azure SQL Database uses Microsoft Entra-only authentication and public networking
+- Azure Key Vault stores secrets and is read through Key Vault references
+- GitHub Actions deploys infrastructure and function code
+- EF migrations run through a dedicated admin-only HTTP function inside the Function App
+- Local development continues to use `local.settings.json` as the primary configuration source
+
+This model avoids VNet, private endpoints, ACR, and Container Apps for the first cloud slice. The main accepted tradeoff is public-endpoint networking for Azure SQL and Key Vault.
 
 ## Tech Stack
 
@@ -50,7 +64,7 @@ srodkowy/
 │   │
 │   └── frontend/                          # Planned Astro app
 │
-├── infra/                                 # Planned Bicep IaC
+├── infra/                                 # Bicep IaC for backend deployment
 ├── tests/                                 # Planned E2E and integration tests
 ├── docs/
 │   ├── vision_first_product_definition.md
@@ -70,6 +84,7 @@ srodkowy/
 - Raw articles are deduplicated by URL and stored in `Articles`
 - Each run is tracked in `IngestionRuns`
 - Requests are processed sequentially and paced to stay within Firecrawl free-plan `/scrape` limits
+- Cloud deployments apply EF migrations through a dedicated admin-only HTTP function after code publish
 
 ### Target Pipeline
 
@@ -120,6 +135,7 @@ The target pipeline runs every 12 hours as a Durable Functions orchestration.
 |---|---|
 | `POST /api/ingestion/run` | Run ingestion for all active sources |
 | `POST /api/ingestion/run/{sourceId}` | Run ingestion for a specific source |
+| `POST /api/admin/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
 
 ### Target Content API
 
@@ -237,6 +253,8 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 
 7. **Polish content, English code** — All UI text and generated content in Polish. Code, comments, docs, and variable names in English.
 
+8. **Migration endpoint instead of a separate runner** — The first Azure deployment slice applies EF migrations through a function-key-protected admin endpoint, which reduces infrastructure components at the cost of granting the Function App identity `db_ddladmin` permissions.
+
 ## Environment Configuration
 
 | Setting | Description |
@@ -248,6 +266,7 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `Firecrawl:TimeoutSeconds` | Per-request timeout budget for Firecrawl calls |
 | `Firecrawl:RequestsPerMinute` | Firecrawl `/scrape` pacing budget |
 | `Database:ConnectionString` | SQL Server / Azure SQL connection string |
+| `Admin:Migrations:Enabled` | Enables the admin migration HTTP endpoint |
 | `Ingestion:MaxCandidateLinksPerSource` | Max filtered article links per source |
 | `Ingestion:MaxArticlesPerSource` | Max article page scrapes per source |
 | `Ingestion:MinContentLength` | Minimum normalized article text length |
@@ -257,3 +276,5 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `GitHub:RepoName` | Repository name |
 
 Local development can use SQL Server Express with Integrated Security, for example: `Server=.\SQLEXPRESS;Database=Srodkowy;Integrated Security=True;TrustServerCertificate=True;`.
+
+In Azure, the backend uses the same logical keys, but configuration is supplied through Function App settings, with secrets coming from Key Vault references and `Database:ConnectionString` using managed identity authentication.

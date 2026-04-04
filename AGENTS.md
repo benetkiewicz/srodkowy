@@ -63,6 +63,8 @@ curl -X POST http://localhost:7071/api/ingestion/run/<source-guid>
 
 Current backend scope is raw ingestion only. Clustering, synthesis, read-side content API, and Durable orchestration are planned but not implemented yet.
 
+Cloud deployment currently targets Azure Functions Flex Consumption, Azure SQL Database, and Azure Key Vault without VNet/private endpoints. EF migrations are triggered through a function-key-protected admin endpoint after deploy.
+
 ### Frontend (Astro)
 
 ```bash
@@ -91,7 +93,7 @@ cd tests/e2e && npx playwright test
 ### Infrastructure
 
 ```bash
-az deployment group create --resource-group srodkowy-rg --template-file infra/main.bicep --parameters infra/parameters/dev.bicepparam
+az deployment group create --resource-group rg-srodkowy-pc --template-file infra/main.bicep --parameters infra/parameters/dev.bicepparam
 ```
 
 ## Architecture Reference

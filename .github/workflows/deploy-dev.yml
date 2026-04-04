@@ -1,0 +1,116 @@
+name: deploy-dev
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+      - 'src/functions/**'
+      - '.github/workflows/deploy-dev.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: polandcentral
+  AZURE_RESOURCE_GROUP: rg-srodkowy-pc
+  DOTNET_VERSION: '8.0.x'
+  PACKAGE_OUTPUT: ${{ github.workspace }}/artifacts/functions/publish
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Check Flex Consumption support
+        shell: bash
+        run: |
+          count=$(az functionapp list-flexconsumption-locations --query "[?name=='${AZURE_LOCATION}'] | length(@)" -o tsv)
+          if [ "$count" != "1" ]; then
+            echo "Flex Consumption is not supported in ${AZURE_LOCATION}."
+            exit 1
+          fi
+
+      - name: Register required providers
+        shell: bash
+        run: |
+          for provider in Microsoft.App Microsoft.Web Microsoft.Insights Microsoft.OperationalInsights Microsoft.ManagedIdentity Microsoft.Storage Microsoft.Sql Microsoft.KeyVault; do
+            az provider register --namespace "$provider" --wait
+          done
+
+      - name: Deploy infrastructure
+        shell: bash
+        run: |
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/dev.bicepparam \
+            --query properties.outputs \
+            --output json > deployment-outputs.json
+
+      - name: Export deployment outputs
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+
+          with open('deployment-outputs.json', 'r', encoding='utf-8') as handle:
+              outputs = json.load(handle)
+
+          print(f"FUNCTION_APP_NAME={outputs['functionAppName']['value']}")
+          print(f"FUNCTION_APP_HOSTNAME={outputs['functionAppHostname']['value']}")
+          PY
+
+      - name: Build backend
+        run: dotnet build src/functions/Srodkowy.sln --configuration Release
+
+      - name: Publish function app
+        run: dotnet publish src/functions/Srodkowy.Functions/Srodkowy.Functions.csproj --configuration Release --output ${{ env.PACKAGE_OUTPUT }}
+
+      - name: Deploy function app package
+        uses: Azure/functions-action@v1.5.2
+        with:
+          app-name: ${{ env.FUNCTION_APP_NAME }}
+          package: ${{ env.PACKAGE_OUTPUT }}
+          remote-build: false
+
+      - name: Run database migrations
+        shell: bash
+        env:
+          MIGRATION_KEY: ${{ secrets.FUNC_MIGRATIONS_KEY }}
+        run: |
+          url="https://${FUNCTION_APP_HOSTNAME}/api/admin/migrations/apply"
+          for attempt in 1 2 3 4 5; do
+            status=$(curl --silent --show-error --output migration-response.json --write-out "%{http_code}" \
+              -X POST "$url" \
+              -H "x-functions-key: ${MIGRATION_KEY}" \
+              -H "Content-Type: application/json")
+            if [ "$status" = "200" ]; then
+              cat migration-response.json
+              exit 0
+            fi
+            echo "Migration attempt ${attempt} returned status ${status}."
+            cat migration-response.json || true
+            sleep 15
+          done
+          echo "Migration endpoint did not succeed."
+          exit 1
