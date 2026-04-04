@@ -109,8 +109,6 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     Firecrawl__BaseUrl: firecrawlBaseUrl
     Firecrawl__RequestsPerMinute: string(firecrawlRequestsPerMinute)
     Firecrawl__TimeoutSeconds: string(firecrawlTimeoutSeconds)
-    FUNCTIONS_EXTENSION_VERSION: '~4'
-    FUNCTIONS_WORKER_RUNTIME: 'dotnet-isolated'
     Ingestion__MaxArticlesPerSource: string(ingestionMaxArticlesPerSource)
     Ingestion__MaxCandidateLinksPerSource: string(ingestionMaxCandidateLinksPerSource)
     Ingestion__MinContentLength: string(ingestionMinContentLength)
