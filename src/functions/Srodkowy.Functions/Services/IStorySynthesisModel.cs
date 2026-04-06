@@ -40,11 +40,13 @@ Rules:
 - headline should be concise and neutral
 - synthesis should be about 150-300 words
 - return between 1 and {request.MaxMarkers} markers
-- each marker phrase must appear exactly in the synthesis text
+- each marker phrase must be copied exactly from the synthesis text as one contiguous substring
 - marker phrases should be short and specific
-- left.excerpts and right.excerpts must use exact wording copied from the provided article text
+- left.excerpts and right.excerpts must use exact wording copied from the provided article text as one contiguous substring
+- every excerpt.articleId must be copied exactly from the input JSON as a UUID string with the same casing and hyphens
 - every excerpt must reference a valid articleId from the same camp
 - do not invent articleIds, sources, quotes, or facts
+- do not normalize, shorten, paraphrase, inflect, or translate marker phrases or excerpts
 - left and right summaries should describe the narrative framing of that camp, not the truth of the event
 
 Input JSON:
@@ -85,5 +87,5 @@ public sealed record StorySynthesisSideResponse(
     IReadOnlyList<StorySynthesisExcerptResponse>? Excerpts);
 
 public sealed record StorySynthesisExcerptResponse(
-    Guid ArticleId,
+    string ArticleId,
     string Text);

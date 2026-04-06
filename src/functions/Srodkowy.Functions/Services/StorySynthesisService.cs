@@ -375,7 +375,19 @@ public sealed class StorySynthesisService(
 
         foreach (var excerpt in excerpts)
         {
-            if (!articleById.TryGetValue(excerpt.ArticleId, out var clusterArticle))
+            if (!Guid.TryParse(excerpt.ArticleId, out var articleId))
+            {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "invalid_excerpt_article_id_format",
+                    expectedCamp,
+                    excerpt.ArticleId);
+                return null;
+            }
+
+            if (!articleById.TryGetValue(articleId, out var clusterArticle))
             {
                 logger.LogWarning(
                     "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId}",
@@ -415,13 +427,13 @@ public sealed class StorySynthesisService(
             }
 
             if (options.Value.RequireVerbatimExcerpts
-                && !ContainsNormalized(clusterArticle.Article.ContentText, excerpt.Text))
+                && !ContainsVerbatimExcerpt(clusterArticle.Article, excerpt.Text))
             {
                 logger.LogWarning(
                     "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName} excerptLength {ExcerptLength}",
                     cluster.Id,
                     cluster.Rank,
-                    "excerpt_not_found_in_content_text",
+                    "excerpt_not_found_in_validation_text",
                     expectedCamp,
                     clusterArticle.ArticleId,
                     clusterArticle.Article.Source.Name,
@@ -439,7 +451,17 @@ public sealed class StorySynthesisService(
         return new ValidatedSide(side.Summary.Trim(), persistedExcerpts);
     }
 
-    private static bool ContainsNormalized(string sourceText, string excerptText)
+    private static bool ContainsVerbatimExcerpt(Article article, string excerptText)
+    {
+        if (ContainsNormalized(article.CleanedContentText, excerptText))
+        {
+            return true;
+        }
+
+        return ContainsNormalized(article.ContentText, excerptText);
+    }
+
+    private static bool ContainsNormalized(string? sourceText, string excerptText)
     {
         if (string.IsNullOrWhiteSpace(sourceText) || string.IsNullOrWhiteSpace(excerptText))
         {
