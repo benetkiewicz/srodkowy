@@ -14,7 +14,7 @@ namespace Srodkowy.Functions.Tests;
 public sealed class IngestionServiceTests
 {
     [Fact]
-    public async Task RunAsync_FillsAcceptedArticleBudgetWithoutScrapingShortDiscoveryTitles()
+    public async Task RunAsync_FillsAcceptedArticleBudgetUsingScrapedDiscoveryLinks()
     {
         var sourceId = Guid.NewGuid();
         var source = new Source
@@ -22,26 +22,30 @@ public sealed class IngestionServiceTests
             Id = sourceId,
             Name = "Test Source",
             BaseUrl = "https://example.com",
-            DiscoveryUrl = "https://example.com",
+            DiscoveryUrl = "https://example.com/news",
+            DiscoveryIncludeTags = "[\"main\"]",
             Camp = "left",
             Active = true
         };
 
         var handler = new RecordingHttpMessageHandler((request, body, _) =>
         {
-            if (request.RequestUri?.AbsolutePath == "/v2/map")
+            if (request.RequestUri?.AbsolutePath == "/v2/scrape" && body.Contains("\"formats\":[\"links\"]", StringComparison.Ordinal))
             {
                 return Task.FromResult(CreateJsonResponse(new
                 {
                     success = true,
-                    links = new object[]
+                    data = new
                     {
-                        new { url = "https://example.com/news/short-discovery", title = "Za krotki tytul" },
-                        new { url = "https://example.com/news/failing-scrape", title = "To jest odpowiednio dlugi tytul do awarii scrape" },
-                        new { url = "https://example.com/news/final-short", title = "To jest odpowiednio dlugi tytul do odrzucenia po scrape" },
-                        new { url = "https://example.com/news/accepted-first", title = "To jest odpowiednio dlugi tytul pierwszego artykulu" },
-                        new { url = "https://example.com/news/accepted-second", title = "To jest odpowiednio dlugi tytul drugiego artykulu" },
-                        new { url = "https://example.com/news/not-needed", title = "To jest odpowiednio dlugi tytul ktorego nie trzeba scrapeowac" }
+                        links = new object[]
+                        {
+                            "https://example.com/video/not-an-article",
+                            "https://example.com/news/failing-scrape",
+                            "https://example.com/news/final-short",
+                            "https://example.com/news/accepted-first",
+                            "https://example.com/news/accepted-second",
+                            "https://example.com/news/not-needed"
+                        }
                     }
                 }));
             }
@@ -101,7 +105,8 @@ public sealed class IngestionServiceTests
         result.DiscoveredLinkCount.Should().Be(6);
         result.CandidateLinkCount.Should().Be(5);
         result.ArticleCount.Should().Be(2);
-        handler.RequestBodies.Should().NotContain(body => body.Contains("short-discovery", StringComparison.Ordinal));
+        handler.RequestBodies.Should().Contain(body => body.Contains("\"includeTags\":[\"main\"]", StringComparison.Ordinal));
+        handler.RequestBodies.Should().NotContain(body => body.Contains("not-an-article", StringComparison.Ordinal));
         handler.RequestBodies.Should().NotContain(body => body.Contains("not-needed", StringComparison.Ordinal));
         handler.RequestBodies.Should().Contain(body => body.Contains("failing-scrape", StringComparison.Ordinal));
         handler.RequestBodies.Should().Contain(body => body.Contains("final-short", StringComparison.Ordinal));

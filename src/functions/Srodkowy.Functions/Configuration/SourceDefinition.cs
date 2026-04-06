@@ -6,4 +6,6 @@ public sealed record SourceDefinition(
     string BaseUrl,
     string DiscoveryUrl,
     string Camp,
+    string[]? DiscoveryIncludeTags = null,
+    string[]? DiscoveryExcludeTags = null,
     bool Active = true);

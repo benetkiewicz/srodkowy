@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Srodkowy.Functions.Configuration;
 using Srodkowy.Functions.Models;
@@ -6,6 +7,8 @@ namespace Srodkowy.Functions.Persistence;
 
 public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> options) : DbContext(options)
 {
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+
     public DbSet<Source> Sources => Set<Source>();
 
     public DbSet<Article> Articles => Set<Article>();
@@ -26,6 +29,8 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
         sourceBuilder.Property(source => source.Name).HasMaxLength(200).IsRequired();
         sourceBuilder.Property(source => source.BaseUrl).HasMaxLength(500).IsRequired();
         sourceBuilder.Property(source => source.DiscoveryUrl).HasMaxLength(500).IsRequired();
+        sourceBuilder.Property(source => source.DiscoveryIncludeTags).HasColumnType("nvarchar(max)");
+        sourceBuilder.Property(source => source.DiscoveryExcludeTags).HasColumnType("nvarchar(max)");
         sourceBuilder.Property(source => source.Camp).HasMaxLength(20).IsRequired();
         sourceBuilder.HasIndex(source => source.Name).IsUnique();
         sourceBuilder.HasIndex(source => source.BaseUrl).IsUnique();
@@ -35,6 +40,8 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
             Name = definition.Name,
             BaseUrl = definition.BaseUrl,
             DiscoveryUrl = definition.DiscoveryUrl,
+            DiscoveryIncludeTags = SerializeTags(definition.DiscoveryIncludeTags),
+            DiscoveryExcludeTags = SerializeTags(definition.DiscoveryExcludeTags),
             Camp = definition.Camp,
             Active = definition.Active
         }));
@@ -143,5 +150,15 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
             .WithMany()
             .HasForeignKey(clusterArticle => clusterArticle.ArticleId)
             .OnDelete(DeleteBehavior.NoAction);
+    }
+
+    private static string? SerializeTags(IReadOnlyList<string>? values)
+    {
+        if (values is null || values.Count == 0)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Serialize(values, SerializerOptions);
     }
 }

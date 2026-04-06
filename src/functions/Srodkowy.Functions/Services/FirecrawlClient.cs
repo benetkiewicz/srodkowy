@@ -22,25 +22,24 @@ public sealed class FirecrawlClient(
 
     private static DateTimeOffset _nextAllowedRequestAtUtc = DateTimeOffset.MinValue;
 
-    public async Task<IReadOnlyList<DiscoveredPageLink>> GetDiscoveredLinksAsync(string url, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DiscoveredPageLink>> GetDiscoveredLinksAsync(
+        string url,
+        IReadOnlyList<string>? includeTags,
+        IReadOnlyList<string>? excludeTags,
+        CancellationToken cancellationToken)
     {
-        var payload = await PostAsync("v2/map", new FirecrawlMapRequest(url), cancellationToken);
+        var payload = await PostAsync("v2/scrape", new FirecrawlDiscoveryScrapeRequest(
+            url,
+            ["links"],
+            includeTags,
+            excludeTags,
+            onlyMainContent: false,
+            waitFor: 1500), cancellationToken);
 
-        var root = payload.TryGetProperty("data", out var data) ? data : payload;
-
-        if (!root.TryGetProperty("links", out var linksElement) || linksElement.ValueKind != JsonValueKind.Array)
-        {
-            return [];
-        }
-
-        return linksElement
-            .EnumerateArray()
-            .Where(element => element.ValueKind == JsonValueKind.Object)
-            .Select(element => new DiscoveredPageLink(
-                GetString(element, "url") ?? string.Empty,
-                GetString(element, "title"),
-                GetString(element, "description")))
+        return EnumerateScrapeData(payload)
+            .SelectMany(GetLinks)
             .Where(link => !string.IsNullOrWhiteSpace(link.Url))
+            .DistinctBy(link => link.Url, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
@@ -50,7 +49,7 @@ public sealed class FirecrawlClient(
             url,
             ["markdown"],
             onlyMainContent: true,
-            waitFor: 1000), cancellationToken);
+            waitFor: 1500), cancellationToken);
 
         var root = payload.TryGetProperty("data", out var data) ? data : payload;
         var markdown = GetString(root, "markdown") ?? string.Empty;
@@ -211,8 +210,86 @@ public sealed class FirecrawlClient(
         return null;
     }
 
-    private sealed record FirecrawlMapRequest(
-        string Url);
+    private static IEnumerable<JsonElement> EnumerateScrapeData(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("data", out var data))
+        {
+            if (payload.ValueKind == JsonValueKind.Object)
+            {
+                yield return payload;
+            }
+
+            yield break;
+        }
+
+        if (data.ValueKind == JsonValueKind.Object)
+        {
+            yield return data;
+            yield break;
+        }
+
+        if (data.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in data.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.Object)
+            {
+                yield return item;
+            }
+        }
+    }
+
+    private static IEnumerable<DiscoveredPageLink> GetLinks(JsonElement root)
+    {
+        if (!root.TryGetProperty("links", out var linksElement) || linksElement.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var element in linksElement.EnumerateArray())
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.String:
+                {
+                    var url = element.GetString();
+
+                    if (!string.IsNullOrWhiteSpace(url))
+                    {
+                        yield return new DiscoveredPageLink(url, null, null);
+                    }
+
+                    break;
+                }
+
+                case JsonValueKind.Object:
+                {
+                    var url = GetString(element, "url");
+
+                    if (!string.IsNullOrWhiteSpace(url))
+                    {
+                        yield return new DiscoveredPageLink(
+                            url,
+                            GetString(element, "title"),
+                            GetString(element, "description"));
+                    }
+
+                    break;
+                }
+            }
+        }
+    }
+
+    private sealed record FirecrawlDiscoveryScrapeRequest(
+        string Url,
+        IReadOnlyList<string> Formats,
+        IReadOnlyList<string>? IncludeTags,
+        IReadOnlyList<string>? ExcludeTags,
+        bool? onlyMainContent,
+        int? waitFor);
 
     private sealed record FirecrawlArticleScrapeRequest(
         string Url,

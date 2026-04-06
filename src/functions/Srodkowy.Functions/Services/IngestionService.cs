@@ -122,11 +122,13 @@ public sealed class IngestionService(
         ISet<string> seenUrls,
         CancellationToken cancellationToken)
     {
-        var discoveredLinks = await firecrawlClient.GetDiscoveredLinksAsync(source.DiscoveryUrl, cancellationToken);
+        var discoveredLinks = await firecrawlClient.GetDiscoveredLinksAsync(
+            source.DiscoveryUrl,
+            source.GetDiscoveryIncludeTags(),
+            source.GetDiscoveryExcludeTags(),
+            cancellationToken);
         var urlQualifiedCount = 0;
-        var shortDiscoveredTitleRejectedCount = 0;
         var uniqueCandidateUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var titleQualifiedCandidates = new List<string>();
 
         foreach (var discoveredLink in discoveredLinks)
         {
@@ -138,21 +140,13 @@ public sealed class IngestionService(
 
             urlQualifiedCount++;
 
-            if (!IsAcceptedTitle(discoveredLink.Title, out var normalizedTitle))
-            {
-                shortDiscoveredTitleRejectedCount++;
-                continue;
-            }
-
             if (!uniqueCandidateUrls.Add(normalizedUrl))
             {
                 continue;
             }
-
-            titleQualifiedCandidates.Add(normalizedUrl);
         }
 
-        var candidateLinks = titleQualifiedCandidates
+        var candidateLinks = uniqueCandidateUrls
             .Take(options.Value.MaxCandidateLinksPerSource)
             .ToArray();
 
@@ -215,15 +209,13 @@ public sealed class IngestionService(
         }
 
         logger.LogInformation(
-            "Source {SourceName}: discovered {DiscoveredLinks} links, {UrlQualifiedLinks} url-qualified, {TitleQualifiedLinks} title-qualified, {CandidateLinks} candidates after cap, {ScrapeAttempts} scrapes, {AcceptedArticles} accepted, {ShortDiscoveredTitleRejectedCount} short discovered-title rejects, {ShortFinalTitleRejectedCount} short final-title rejects",
+            "Source {SourceName}: discovered {DiscoveredLinks} links, {UrlQualifiedLinks} url-qualified, {CandidateLinks} candidates after cap, {ScrapeAttempts} scrapes, {AcceptedArticles} accepted, {ShortFinalTitleRejectedCount} short final-title rejects",
             source.Name,
             discoveredLinks.Count,
             urlQualifiedCount,
-            titleQualifiedCandidates.Count,
             candidateLinks.Length,
             scrapeAttempts,
             articles.Count,
-            shortDiscoveredTitleRejectedCount,
             shortFinalTitleRejectedCount);
 
         return new SourceIngestionResult(discoveredLinks.Count, candidateLinks.Length, articles);
