@@ -47,6 +47,9 @@ Rules:
 - every excerpt must reference a valid articleId from the same camp
 - do not invent articleIds, sources, quotes, or facts
 - do not normalize, shorten, paraphrase, inflect, or translate marker phrases or excerpts
+- before returning, verify that every marker phrase appears literally inside synthesis; if not, omit that marker
+- before returning, verify that every excerpt text appears literally inside the selected article text; if not, omit that excerpt
+- do not change quotation marks, dashes, casing, or punctuation inside copied marker phrases or excerpts
 - left and right summaries should describe the narrative framing of that camp, not the truth of the event
 
 Input JSON:

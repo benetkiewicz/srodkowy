@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -305,9 +306,7 @@ public sealed class StorySynthesisService(
             }
 
             var phrase = marker.Phrase.Trim();
-            var startOffset = response.Synthesis.IndexOf(phrase, StringComparison.OrdinalIgnoreCase);
-
-            if (startOffset < 0)
+            if (!TryFindNormalizedSpan(response.Synthesis, phrase, out var markerMatch))
             {
                 logger.LogWarning(
                     "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase}",
@@ -318,10 +317,21 @@ public sealed class StorySynthesisService(
                 return null;
             }
 
+            if (!ContainsLiteral(response.Synthesis, phrase))
+            {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase} normalizedStartOffset {NormalizedStartOffset}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "marker_phrase_only_matches_normalized_text",
+                    phrase,
+                    markerMatch.StartOffset);
+            }
+
             persistedMarkers.Add(new StoryMarkerDto(
-                phrase,
-                startOffset,
-                phrase.Length,
+                markerMatch.RawText,
+                markerMatch.StartOffset,
+                markerMatch.Length,
                 marker.Kind?.Trim() ?? string.Empty,
                 marker.Explanation?.Trim() ?? string.Empty));
         }
@@ -428,18 +438,24 @@ public sealed class StorySynthesisService(
 
             if (options.Value.RequireVerbatimExcerpts
                 && !ContainsVerbatimExcerpt(clusterArticle.Article, excerpt.Text))
-            {
-                logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName} excerptLength {ExcerptLength}",
-                    cluster.Id,
-                    cluster.Rank,
-                    "excerpt_not_found_in_validation_text",
-                    expectedCamp,
-                    clusterArticle.ArticleId,
-                    clusterArticle.Article.Source.Name,
-                    excerpt.Text.Length);
-                return null;
-            }
+        {
+            var matchedCleaned = ContainsNormalized(clusterArticle.Article.CleanedContentText, excerpt.Text);
+            var matchedRaw = ContainsNormalized(clusterArticle.Article.ContentText, excerpt.Text);
+
+            logger.LogWarning(
+                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName} excerptLength {ExcerptLength} matchedCleaned {MatchedCleaned} matchedRaw {MatchedRaw} excerptPreview {ExcerptPreview}",
+                cluster.Id,
+                cluster.Rank,
+                "excerpt_not_found_in_validation_text",
+                expectedCamp,
+                clusterArticle.ArticleId,
+                clusterArticle.Article.Source.Name,
+                excerpt.Text.Length,
+                matchedCleaned,
+                matchedRaw,
+                BuildLogPreview(excerpt.Text));
+            return null;
+        }
 
             persistedExcerpts.Add(new StoryExcerptDto(
                 clusterArticle.ArticleId,
@@ -453,28 +469,110 @@ public sealed class StorySynthesisService(
 
     private static bool ContainsVerbatimExcerpt(Article article, string excerptText)
     {
-        if (ContainsNormalized(article.CleanedContentText, excerptText))
-        {
-            return true;
-        }
+        return ContainsNormalized(article.CleanedContentText, excerptText)
+            || ContainsNormalized(article.ContentText, excerptText);
+    }
 
-        return ContainsNormalized(article.ContentText, excerptText);
+    private static bool ContainsLiteral(string sourceText, string phrase)
+    {
+        return sourceText.IndexOf(phrase, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static bool ContainsNormalized(string? sourceText, string excerptText)
     {
+        return TryFindNormalizedSpan(sourceText, excerptText, out _);
+    }
+
+    private static bool TryFindNormalizedSpan(string? sourceText, string excerptText, out NormalizedSpanMatch match)
+    {
+        match = new NormalizedSpanMatch(0, 0, string.Empty);
+
         if (string.IsNullOrWhiteSpace(sourceText) || string.IsNullOrWhiteSpace(excerptText))
         {
             return false;
         }
 
-        return NormalizeWhitespace(sourceText).Contains(NormalizeWhitespace(excerptText), StringComparison.Ordinal);
+        var normalizedSource = BuildNormalizedTextMap(sourceText);
+        var normalizedExcerpt = BuildNormalizedTextMap(excerptText);
+
+        if (normalizedSource.Text.Length == 0 || normalizedExcerpt.Text.Length == 0)
+        {
+            return false;
+        }
+
+        var normalizedIndex = normalizedSource.Text.IndexOf(normalizedExcerpt.Text, StringComparison.OrdinalIgnoreCase);
+
+        if (normalizedIndex < 0)
+        {
+            return false;
+        }
+
+        var startOffset = normalizedSource.RawIndexMap[normalizedIndex];
+        var endOffset = normalizedSource.RawIndexMap[normalizedIndex + normalizedExcerpt.Text.Length - 1];
+        var length = (endOffset - startOffset) + 1;
+        match = new NormalizedSpanMatch(startOffset, length, sourceText.Substring(startOffset, length));
+        return true;
     }
 
-    private static string NormalizeWhitespace(string value)
+    private static NormalizedTextMap BuildNormalizedTextMap(string value)
     {
-        return string.Join(' ', value
-            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        var text = new StringBuilder(value.Length);
+        var rawIndexMap = new List<int>(value.Length);
+        var lastWasSpace = true;
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            var rawChar = value[index];
+
+            if (char.IsWhiteSpace(rawChar) || rawChar == '\u00A0')
+            {
+                if (lastWasSpace)
+                {
+                    continue;
+                }
+
+                text.Append(' ');
+                rawIndexMap.Add(index);
+                lastWasSpace = true;
+                continue;
+            }
+
+            var normalizedChunk = NormalizeCharacter(rawChar);
+
+            foreach (var normalizedChar in normalizedChunk)
+            {
+                text.Append(normalizedChar);
+                rawIndexMap.Add(index);
+            }
+
+            lastWasSpace = false;
+        }
+
+        if (text.Length > 0 && text[^1] == ' ')
+        {
+            text.Length--;
+            rawIndexMap.RemoveAt(rawIndexMap.Count - 1);
+        }
+
+        return new NormalizedTextMap(text.ToString(), rawIndexMap);
+    }
+
+    private static string NormalizeCharacter(char value)
+    {
+        return value switch
+        {
+            '\u2018' or '\u2019' or '\u201A' or '\u201B' or '\u2032' or '\u0060' => "'",
+            '\u201C' or '\u201D' or '\u201E' or '\u201F' or '\u2033' => "\"",
+            '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2015' or '\u2212' => "-",
+            '\u2026' => "...",
+            _ => value.ToString()
+        };
+    }
+
+    private static string BuildLogPreview(string value)
+    {
+        var normalized = BuildNormalizedTextMap(value).Text;
+        return normalized.Length <= 120 ? normalized : normalized[..120];
     }
 
     private static string Truncate(string value, int maxLength)
@@ -508,4 +606,8 @@ public sealed class StorySynthesisService(
     private sealed record ValidatedSide(
         string Summary,
         IReadOnlyList<StoryExcerptDto> Excerpts);
+
+    private sealed record NormalizedTextMap(string Text, IReadOnlyList<int> RawIndexMap);
+
+    private sealed record NormalizedSpanMatch(int StartOffset, int Length, string RawText);
 }
