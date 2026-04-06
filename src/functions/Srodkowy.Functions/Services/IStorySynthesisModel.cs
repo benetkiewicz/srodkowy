@@ -30,8 +30,8 @@ Return strict JSON with this shape:
 - headline: string
 - synthesis: string
 - markers: array of objects with phrase, kind, explanation
-- left: object with summary and excerpts
-- right: object with summary and excerpts
+- left: object with summary and excerptSnippetIds
+- right: object with summary and excerptSnippetIds
 
 Rules:
 - write all generated text in Polish
@@ -42,14 +42,14 @@ Rules:
 - return between 1 and {request.MaxMarkers} markers
 - each marker phrase must be copied exactly from the synthesis text as one contiguous substring
 - marker phrases should be short and specific
-- left.excerpts and right.excerpts must use exact wording copied from the provided article text as one contiguous substring
-- every excerpt.articleId must be copied exactly from the input JSON as a UUID string with the same casing and hyphens
-- every excerpt must reference a valid articleId from the same camp
-- do not invent articleIds, sources, quotes, or facts
-- do not normalize, shorten, paraphrase, inflect, or translate marker phrases or excerpts
+- left.excerptSnippetIds and right.excerptSnippetIds must contain only snippet IDs from ExcerptCandidates
+- do not generate, rewrite, shorten, or edit excerpt text
+- every selected snippet must come from the matching camp
+- do not invent articleIds, sources, snippet IDs, quotes, or facts
+- do not normalize, shorten, paraphrase, inflect, or translate marker phrases
 - before returning, verify that every marker phrase appears literally inside synthesis; if not, omit that marker
-- before returning, verify that every excerpt text appears literally inside the selected article text; if not, omit that excerpt
-- do not change quotation marks, dashes, casing, or punctuation inside copied marker phrases or excerpts
+- before returning, verify that every selected excerptSnippetId exists in ExcerptCandidates; if not, omit it
+- do not change quotation marks, dashes, casing, or punctuation inside copied marker phrases
 - left and right summaries should describe the narrative framing of that camp, not the truth of the event
 
 Input JSON:
@@ -62,7 +62,8 @@ public sealed record StorySynthesisModelRequest(
     Guid CandidateClusterId,
     int Rank,
     int MaxMarkers,
-    IReadOnlyList<StorySynthesisArticleInput> Articles);
+    IReadOnlyList<StorySynthesisArticleInput> Articles,
+    IReadOnlyList<StorySynthesisExcerptCandidateInput> ExcerptCandidates);
 
 public sealed record StorySynthesisArticleInput(
     Guid ArticleId,
@@ -72,6 +73,13 @@ public sealed record StorySynthesisArticleInput(
     DateTimeOffset? PublishedAt,
     string Title,
     string CleanedContentText);
+
+public sealed record StorySynthesisExcerptCandidateInput(
+    string SnippetId,
+    Guid ArticleId,
+    string Camp,
+    string SourceName,
+    string Text);
 
 public sealed record StorySynthesisModelResponse(
     string Headline,
@@ -87,8 +95,4 @@ public sealed record StorySynthesisMarkerResponse(
 
 public sealed record StorySynthesisSideResponse(
     string Summary,
-    IReadOnlyList<StorySynthesisExcerptResponse>? Excerpts);
-
-public sealed record StorySynthesisExcerptResponse(
-    string ArticleId,
-    string Text);
+    IReadOnlyList<string>? ExcerptSnippetIds);

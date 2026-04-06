@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,6 +20,10 @@ public sealed class StorySynthesisService(
 {
     private static readonly ActivitySource ActivitySource = new(ObservabilityOptions.ChatSourceName);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+    private static readonly Regex SentenceCandidateRegex = new(@".+?(?:[.!?…]+(?:[\""'”’)]*)?(?=\s|$)|$)", RegexOptions.Compiled | RegexOptions.Singleline);
+    private const int MaxExcerptCandidatesPerArticle = 4;
+    private const int MinExcerptCandidateLength = 45;
+    private const int MaxExcerptCandidateLength = 320;
 
     public async Task<SynthesisRunResult> RunAsync(string triggeredBy, SynthesisRunRequest request, CancellationToken cancellationToken)
     {
@@ -162,9 +167,10 @@ public sealed class StorySynthesisService(
     private async Task<Story?> BuildStoryAsync(CandidateCluster cluster, Guid editionId, CancellationToken cancellationToken)
     {
         var selectedArticles = SelectArticles(cluster);
-        var prompt = new StorySynthesisModelRequest(cluster.Id, cluster.Rank, options.Value.MaxMarkers, selectedArticles);
+        var excerptCandidates = BuildExcerptCandidates(selectedArticles);
+        var prompt = new StorySynthesisModelRequest(cluster.Id, cluster.Rank, options.Value.MaxMarkers, selectedArticles, excerptCandidates.Select(MapExcerptCandidate).ToList());
         var modelResponse = await synthesisModel.SynthesizeAsync(prompt, cancellationToken);
-        var validated = Validate(cluster, modelResponse);
+        var validated = Validate(cluster, excerptCandidates, modelResponse);
 
         if (validated is null)
         {
@@ -236,7 +242,60 @@ public sealed class StorySynthesisService(
             .ToList();
     }
 
-    private ValidatedStory? Validate(CandidateCluster cluster, StorySynthesisModelResponse response)
+    private static List<ExcerptCandidate> BuildExcerptCandidates(IReadOnlyList<StorySynthesisArticleInput> articles)
+    {
+        var candidates = new List<ExcerptCandidate>();
+
+        for (var articleIndex = 0; articleIndex < articles.Count; articleIndex++)
+        {
+            var article = articles[articleIndex];
+            var snippets = SentenceCandidateRegex.Matches(article.CleanedContentText)
+                .Select(match => match.Value.Trim())
+                .Where(snippet => !string.IsNullOrWhiteSpace(snippet))
+                .Where(snippet => snippet.Length >= MinExcerptCandidateLength && snippet.Length <= MaxExcerptCandidateLength)
+                .Distinct(StringComparer.Ordinal)
+                .Take(MaxExcerptCandidatesPerArticle)
+                .ToList();
+
+            if (snippets.Count == 0)
+            {
+                var fallback = article.CleanedContentText.Trim();
+
+                if (!string.IsNullOrWhiteSpace(fallback))
+                {
+                    snippets.Add(Truncate(fallback, MaxExcerptCandidateLength).Trim());
+                }
+            }
+
+            for (var snippetIndex = 0; snippetIndex < snippets.Count; snippetIndex++)
+            {
+                candidates.Add(new ExcerptCandidate(
+                    $"A{articleIndex + 1}-S{snippetIndex + 1}",
+                    article.ArticleId,
+                    article.Camp,
+                    article.SourceName,
+                    article.Url,
+                    snippets[snippetIndex]));
+            }
+        }
+
+        return candidates;
+    }
+
+    private static StorySynthesisExcerptCandidateInput MapExcerptCandidate(ExcerptCandidate candidate)
+    {
+        return new StorySynthesisExcerptCandidateInput(
+            candidate.SnippetId,
+            candidate.ArticleId,
+            candidate.Camp,
+            candidate.SourceName,
+            candidate.Text);
+    }
+
+    private ValidatedStory? Validate(
+        CandidateCluster cluster,
+        IReadOnlyList<ExcerptCandidate> excerptCandidates,
+        StorySynthesisModelResponse response)
     {
         if (string.IsNullOrWhiteSpace(response.Headline) || string.IsNullOrWhiteSpace(response.Synthesis))
         {
@@ -337,14 +396,15 @@ public sealed class StorySynthesisService(
         }
 
         var articleById = cluster.Articles.ToDictionary(clusterArticle => clusterArticle.ArticleId);
-        var left = ValidateSide(cluster, SourceCamp.Left, response.Left, articleById);
+        var excerptCandidateById = excerptCandidates.ToDictionary(candidate => candidate.SnippetId, StringComparer.OrdinalIgnoreCase);
+        var left = ValidateSide(cluster, SourceCamp.Left, response.Left, articleById, excerptCandidateById);
 
         if (left is null)
         {
             return null;
         }
 
-        var right = ValidateSide(cluster, SourceCamp.Right, response.Right, articleById);
+        var right = ValidateSide(cluster, SourceCamp.Right, response.Right, articleById, excerptCandidateById);
 
         if (right is null)
         {
@@ -363,114 +423,90 @@ public sealed class StorySynthesisService(
         CandidateCluster cluster,
         string expectedCamp,
         StorySynthesisSideResponse side,
-        IReadOnlyDictionary<Guid, CandidateClusterArticle> articleById)
+        IReadOnlyDictionary<Guid, CandidateClusterArticle> articleById,
+        IReadOnlyDictionary<string, ExcerptCandidate> excerptCandidateById)
     {
-        var excerpts = side.Excerpts?
-            .Where(excerpt => excerpt is not null)
-            .Select(excerpt => excerpt!)
+        var excerptSnippetIds = side.ExcerptSnippetIds?
+            .Where(snippetId => !string.IsNullOrWhiteSpace(snippetId))
+            .Select(snippetId => snippetId.Trim())
             .ToList();
 
-        if (excerpts is null || excerpts.Count == 0)
+        if (excerptSnippetIds is null || excerptSnippetIds.Count == 0)
         {
             logger.LogWarning(
                 "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp}",
                 cluster.Id,
                 cluster.Rank,
-                "missing_side_excerpts",
+                "missing_side_excerpt_snippet_ids",
                 expectedCamp);
             return null;
         }
 
-        var persistedExcerpts = new List<StoryExcerptDto>(excerpts.Count);
+        var persistedExcerpts = new List<StoryExcerptDto>(excerptSnippetIds.Count);
+        var seenSnippetIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var excerpt in excerpts)
+        foreach (var snippetId in excerptSnippetIds)
         {
-            if (!Guid.TryParse(excerpt.ArticleId, out var articleId))
+            if (!seenSnippetIds.Add(snippetId))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} snippetId {SnippetId}",
                     cluster.Id,
                     cluster.Rank,
-                    "invalid_excerpt_article_id_format",
+                    "duplicate_excerpt_snippet_id",
                     expectedCamp,
-                    excerpt.ArticleId);
+                    snippetId);
                 return null;
             }
 
-            if (!articleById.TryGetValue(articleId, out var clusterArticle))
+            if (!excerptCandidateById.TryGetValue(snippetId, out var excerptCandidate))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} snippetId {SnippetId}",
                     cluster.Id,
                     cluster.Rank,
-                    "excerpt_article_not_in_cluster",
+                    "invalid_excerpt_snippet_id",
                     expectedCamp,
-                    excerpt.ArticleId);
+                    snippetId);
                 return null;
             }
 
-            if (!string.Equals(clusterArticle.Camp, expectedCamp, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(excerptCandidate.Camp, expectedCamp, StringComparison.OrdinalIgnoreCase))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} actualCamp {ActualCamp} articleId {ArticleId} sourceName {SourceName}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} actualCamp {ActualCamp} snippetId {SnippetId} articleId {ArticleId} sourceName {SourceName}",
                     cluster.Id,
                     cluster.Rank,
-                    "excerpt_wrong_camp",
+                    "excerpt_snippet_wrong_camp",
                     expectedCamp,
-                    clusterArticle.Camp,
-                    clusterArticle.ArticleId,
-                    clusterArticle.Article.Source.Name);
+                    excerptCandidate.Camp,
+                    snippetId,
+                    excerptCandidate.ArticleId,
+                    excerptCandidate.SourceName);
                 return null;
             }
 
-            if (string.IsNullOrWhiteSpace(excerpt.Text))
+            if (!articleById.TryGetValue(excerptCandidate.ArticleId, out _))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} snippetId {SnippetId} articleId {ArticleId}",
                     cluster.Id,
                     cluster.Rank,
-                    "blank_excerpt_text",
+                    "excerpt_snippet_not_in_cluster",
                     expectedCamp,
-                    clusterArticle.ArticleId,
-                    clusterArticle.Article.Source.Name);
+                    snippetId,
+                    excerptCandidate.ArticleId);
                 return null;
             }
-
-            if (options.Value.RequireVerbatimExcerpts
-                && !ContainsVerbatimExcerpt(clusterArticle.Article, excerpt.Text))
-        {
-            var matchedCleaned = ContainsNormalized(clusterArticle.Article.CleanedContentText, excerpt.Text);
-            var matchedRaw = ContainsNormalized(clusterArticle.Article.ContentText, excerpt.Text);
-
-            logger.LogWarning(
-                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName} excerptLength {ExcerptLength} matchedCleaned {MatchedCleaned} matchedRaw {MatchedRaw} excerptPreview {ExcerptPreview}",
-                cluster.Id,
-                cluster.Rank,
-                "excerpt_not_found_in_validation_text",
-                expectedCamp,
-                clusterArticle.ArticleId,
-                clusterArticle.Article.Source.Name,
-                excerpt.Text.Length,
-                matchedCleaned,
-                matchedRaw,
-                BuildLogPreview(excerpt.Text));
-            return null;
-        }
 
             persistedExcerpts.Add(new StoryExcerptDto(
-                clusterArticle.ArticleId,
-                excerpt.Text.Trim(),
-                clusterArticle.Article.Source.Name,
-                clusterArticle.Article.Url));
+                excerptCandidate.ArticleId,
+                excerptCandidate.Text,
+                excerptCandidate.SourceName,
+                excerptCandidate.SourceUrl));
         }
 
         return new ValidatedSide(side.Summary.Trim(), persistedExcerpts);
-    }
-
-    private static bool ContainsVerbatimExcerpt(Article article, string excerptText)
-    {
-        return ContainsNormalized(article.CleanedContentText, excerptText)
-            || ContainsNormalized(article.ContentText, excerptText);
     }
 
     private static bool ContainsLiteral(string sourceText, string phrase)
@@ -569,12 +605,6 @@ public sealed class StorySynthesisService(
         };
     }
 
-    private static string BuildLogPreview(string value)
-    {
-        var normalized = BuildNormalizedTextMap(value).Text;
-        return normalized.Length <= 120 ? normalized : normalized[..120];
-    }
-
     private static string Truncate(string value, int maxLength)
     {
         return value.Length <= maxLength
@@ -606,6 +636,14 @@ public sealed class StorySynthesisService(
     private sealed record ValidatedSide(
         string Summary,
         IReadOnlyList<StoryExcerptDto> Excerpts);
+
+    private sealed record ExcerptCandidate(
+        string SnippetId,
+        Guid ArticleId,
+        string Camp,
+        string SourceName,
+        string SourceUrl,
+        string Text);
 
     private sealed record NormalizedTextMap(string Text, IReadOnlyList<int> RawIndexMap);
 

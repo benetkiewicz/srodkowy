@@ -88,7 +88,7 @@ public sealed class StorySynthesisServiceTests
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse(setup.RightArticleId.ToString(), setup.RightExcerpt)])
+                    [GetFirstSnippetId(request, setup.RightArticleId)])
             }));
 
         var result = await service.RunAsync(
@@ -101,7 +101,7 @@ public sealed class StorySynthesisServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_skips_story_when_excerpt_text_is_not_verbatim()
+    public async Task RunAsync_skips_story_when_side_has_no_excerpt_snippet_ids()
     {
         var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
         var setup = await SeedSingleClusterAsync(dbContextOptions);
@@ -111,7 +111,7 @@ public sealed class StorySynthesisServiceTests
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse(setup.LeftArticleId.ToString(), "Nie ma takiego cytatu")])
+                    [])
             }));
 
         var result = await service.RunAsync(
@@ -124,7 +124,7 @@ public sealed class StorySynthesisServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_skips_story_when_excerpt_article_is_unknown()
+    public async Task RunAsync_skips_story_when_excerpt_snippet_id_is_unknown()
     {
         var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
         var setup = await SeedSingleClusterAsync(dbContextOptions);
@@ -134,7 +134,7 @@ public sealed class StorySynthesisServiceTests
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse(Guid.NewGuid().ToString(), setup.LeftExcerpt)])
+                    ["missing-snippet-id"])
             }));
 
         var result = await service.RunAsync(
@@ -147,7 +147,7 @@ public sealed class StorySynthesisServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_skips_story_when_excerpt_article_id_format_is_invalid()
+    public async Task RunAsync_skips_story_when_excerpt_snippet_id_is_duplicated()
     {
         var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
         var setup = await SeedSingleClusterAsync(dbContextOptions);
@@ -157,7 +157,7 @@ public sealed class StorySynthesisServiceTests
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse("not-a-guid", setup.LeftExcerpt)])
+                    [GetFirstSnippetId(request, setup.LeftArticleId), GetFirstSnippetId(request, setup.LeftArticleId)])
             }));
 
         var result = await service.RunAsync(
@@ -170,7 +170,7 @@ public sealed class StorySynthesisServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_accepts_excerpt_found_only_in_cleaned_content_text()
+    public async Task RunAsync_reconstructs_excerpt_from_selected_snippet_id()
     {
         var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
         var setup = await SeedSingleClusterAsync(
@@ -183,7 +183,7 @@ public sealed class StorySynthesisServiceTests
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse(setup.LeftArticleId.ToString(), "Lewy cytat tylko po cleanupie")])
+                    [GetFirstSnippetId(request, setup.LeftArticleId)])
             }));
 
         var result = await service.RunAsync(
@@ -193,6 +193,17 @@ public sealed class StorySynthesisServiceTests
 
         result.StoryCount.Should().Be(1);
         result.SkippedClusterIds.Should().BeEmpty();
+
+        await using var verificationContext = StoryPublishingTestSupport.CreateDbContext(dbContextOptions);
+        var edition = await verificationContext.Editions
+            .Include(item => item.Stories)
+                .ThenInclude(story => story.Sides)
+            .SingleAsync();
+        var leftSide = edition.Stories.Single().Sides.Single(side => side.Camp == SourceCamp.Left);
+        var excerpts = JsonSerializer.Deserialize<List<StoryExcerptDto>>(leftSide.ExcerptsJson, SerializerOptions);
+
+        excerpts.Should().ContainSingle();
+        excerpts![0].Text.Should().Be("Lewy cytat tylko po cleanupie oraz dalsza analiza wydarzen.");
     }
 
     [Fact]
@@ -208,7 +219,7 @@ public sealed class StorySynthesisServiceTests
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse(setup.LeftArticleId.ToString(), "Lewy portal nazwal to \"nowym porzadkiem\" - i wskazal dalszy plan.")])
+                    [GetFirstSnippetId(request, setup.LeftArticleId)])
             }));
 
         var result = await service.RunAsync(
@@ -233,10 +244,10 @@ public sealed class StorySynthesisServiceTests
                 [new StorySynthesisMarkerResponse("\"napiecie\" - polityczne", "framing", "Obie strony inaczej opisuja skale sporu.")],
                 new StorySynthesisSideResponse(
                     "Lewa narracja",
-                    [new StorySynthesisExcerptResponse(setup.LeftArticleId.ToString(), request.Articles.Single(article => article.ArticleId == setup.LeftArticleId).CleanedContentText.Split(' ').Take(5).Aggregate((left, right) => left + " " + right))]),
+                    [GetFirstSnippetId(request, setup.LeftArticleId)]),
                 new StorySynthesisSideResponse(
                     "Prawa narracja",
-                    [new StorySynthesisExcerptResponse(setup.RightArticleId.ToString(), request.Articles.Single(article => article.ArticleId == setup.RightArticleId).CleanedContentText.Split(' ').Take(5).Aggregate((left, right) => left + " " + right))]))));
+                    [GetFirstSnippetId(request, setup.RightArticleId)]))));
 
         var result = await service.RunAsync(
             "test",
@@ -277,10 +288,15 @@ public sealed class StorySynthesisServiceTests
             [new StorySynthesisMarkerResponse("napięcie polityczne", "framing", "Obie strony inaczej opisują skalę sporu.")],
             new StorySynthesisSideResponse(
                 "Lewa narracja",
-                [new StorySynthesisExcerptResponse(leftArticleId.ToString(), request.Articles.Single(article => article.ArticleId == leftArticleId).CleanedContentText.Split(' ').Take(5).Aggregate((left, right) => left + " " + right))]),
+                [GetFirstSnippetId(request, leftArticleId)]),
             new StorySynthesisSideResponse(
                 "Prawa narracja",
-                [new StorySynthesisExcerptResponse(rightArticleId.ToString(), request.Articles.Single(article => article.ArticleId == rightArticleId).CleanedContentText.Split(' ').Take(5).Aggregate((left, right) => left + " " + right))]));
+                [GetFirstSnippetId(request, rightArticleId)]));
+    }
+
+    private static string GetFirstSnippetId(StorySynthesisModelRequest request, Guid articleId)
+    {
+        return request.ExcerptCandidates.First(candidate => candidate.ArticleId == articleId).SnippetId;
     }
 
     private static async Task<ClusterSetup> SeedSingleClusterAsync(
