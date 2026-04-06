@@ -13,7 +13,7 @@ resource sqlServer 'Microsoft.Sql/servers@2020-11-01-preview' = {
   tags: tags
   properties: {
     administrators: {
-      azureADOnlyAuthentication: true
+      administratorType: 'ActiveDirectory'
       login: aadAdminName
       principalType: aadAdminPrincipalType
       sid: aadAdminObjectId
@@ -22,6 +22,14 @@ resource sqlServer 'Microsoft.Sql/servers@2020-11-01-preview' = {
     minimalTlsVersion: '1.2'
     publicNetworkAccess: 'Enabled'
     version: '12.0'
+  }
+}
+
+resource sqlServerAzureAdOnlyAuthentication 'Microsoft.Sql/servers/azureADOnlyAuthentications@2020-11-01-preview' = {
+  parent: sqlServer
+  name: 'Default'
+  properties: {
+    azureADOnlyAuthentication: false
   }
 }
 
