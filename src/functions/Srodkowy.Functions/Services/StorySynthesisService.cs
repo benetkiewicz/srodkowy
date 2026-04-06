@@ -239,16 +239,35 @@ public sealed class StorySynthesisService(
     {
         if (string.IsNullOrWhiteSpace(response.Headline) || string.IsNullOrWhiteSpace(response.Synthesis))
         {
+            logger.LogWarning(
+                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode}",
+                cluster.Id,
+                cluster.Rank,
+                "missing_headline_or_synthesis");
             return null;
         }
 
         if (response.Left is null || response.Right is null)
         {
+            logger.LogWarning(
+                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} hasLeft {HasLeft} hasRight {HasRight}",
+                cluster.Id,
+                cluster.Rank,
+                "missing_side_object",
+                response.Left is not null,
+                response.Right is not null);
             return null;
         }
 
         if (string.IsNullOrWhiteSpace(response.Left.Summary) || string.IsNullOrWhiteSpace(response.Right.Summary))
         {
+            logger.LogWarning(
+                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} leftSummaryLength {LeftSummaryLength} rightSummaryLength {RightSummaryLength}",
+                cluster.Id,
+                cluster.Rank,
+                "missing_side_summary",
+                response.Left.Summary?.Length ?? 0,
+                response.Right.Summary?.Length ?? 0);
             return null;
         }
 
@@ -259,6 +278,13 @@ public sealed class StorySynthesisService(
 
         if (markers is null || markers.Count == 0 || markers.Count > options.Value.MaxMarkers)
         {
+            logger.LogWarning(
+                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerCount {MarkerCount} maxMarkers {MaxMarkers}",
+                cluster.Id,
+                cluster.Rank,
+                "invalid_marker_count",
+                markers?.Count ?? 0,
+                options.Value.MaxMarkers);
             return null;
         }
 
@@ -269,6 +295,12 @@ public sealed class StorySynthesisService(
         {
             if (string.IsNullOrWhiteSpace(marker.Phrase) || !seenPhrases.Add(marker.Phrase.Trim()))
             {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "blank_or_duplicate_marker_phrase",
+                    marker.Phrase);
                 return null;
             }
 
@@ -277,6 +309,12 @@ public sealed class StorySynthesisService(
 
             if (startOffset < 0)
             {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "marker_phrase_not_in_synthesis",
+                    phrase);
                 return null;
             }
 
@@ -289,10 +327,16 @@ public sealed class StorySynthesisService(
         }
 
         var articleById = cluster.Articles.ToDictionary(clusterArticle => clusterArticle.ArticleId);
-        var left = ValidateSide(SourceCamp.Left, response.Left, articleById);
-        var right = ValidateSide(SourceCamp.Right, response.Right, articleById);
+        var left = ValidateSide(cluster, SourceCamp.Left, response.Left, articleById);
 
-        if (left is null || right is null)
+        if (left is null)
+        {
+            return null;
+        }
+
+        var right = ValidateSide(cluster, SourceCamp.Right, response.Right, articleById);
+
+        if (right is null)
         {
             return null;
         }
@@ -306,6 +350,7 @@ public sealed class StorySynthesisService(
     }
 
     private ValidatedSide? ValidateSide(
+        CandidateCluster cluster,
         string expectedCamp,
         StorySynthesisSideResponse side,
         IReadOnlyDictionary<Guid, CandidateClusterArticle> articleById)
@@ -317,6 +362,12 @@ public sealed class StorySynthesisService(
 
         if (excerpts is null || excerpts.Count == 0)
         {
+            logger.LogWarning(
+                "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp}",
+                cluster.Id,
+                cluster.Rank,
+                "missing_side_excerpts",
+                expectedCamp);
             return null;
         }
 
@@ -326,22 +377,55 @@ public sealed class StorySynthesisService(
         {
             if (!articleById.TryGetValue(excerpt.ArticleId, out var clusterArticle))
             {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "excerpt_article_not_in_cluster",
+                    expectedCamp,
+                    excerpt.ArticleId);
                 return null;
             }
 
             if (!string.Equals(clusterArticle.Camp, expectedCamp, StringComparison.OrdinalIgnoreCase))
             {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} actualCamp {ActualCamp} articleId {ArticleId} sourceName {SourceName}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "excerpt_wrong_camp",
+                    expectedCamp,
+                    clusterArticle.Camp,
+                    clusterArticle.ArticleId,
+                    clusterArticle.Article.Source.Name);
                 return null;
             }
 
             if (string.IsNullOrWhiteSpace(excerpt.Text))
             {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "blank_excerpt_text",
+                    expectedCamp,
+                    clusterArticle.ArticleId,
+                    clusterArticle.Article.Source.Name);
                 return null;
             }
 
             if (options.Value.RequireVerbatimExcerpts
                 && !ContainsNormalized(clusterArticle.Article.ContentText, excerpt.Text))
             {
+                logger.LogWarning(
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} expectedCamp {ExpectedCamp} articleId {ArticleId} sourceName {SourceName} excerptLength {ExcerptLength}",
+                    cluster.Id,
+                    cluster.Rank,
+                    "excerpt_not_found_in_content_text",
+                    expectedCamp,
+                    clusterArticle.ArticleId,
+                    clusterArticle.Article.Source.Name,
+                    excerpt.Text.Length);
                 return null;
             }
 
