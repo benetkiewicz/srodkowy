@@ -113,8 +113,10 @@ srodkowy/
   - qualified clusters are intermediate synthesis inputs, not yet published stories
 - Qualified clusters can then be turned into publishable content through a manual synthesis stage:
   - `POST /api/ops/synthesis/run` selects qualified candidate clusters from one cluster run
-  - GPT-4o generates a Polish headline, central synthesis, markers, and left/right side summaries with cited excerpts
-  - backend validation ensures marker phrases appear in the synthesis and cited excerpts match cluster articles and camps
+  - backend first selects bounded article inputs and builds excerpt snippet candidates from `CleanedContentText`
+  - GPT-4o draft generation produces a Polish headline, central synthesis, left/right side summaries, and selected excerpt snippet IDs
+  - backend then builds exact marker candidates from the generated synthesis text and runs a second GPT-4o marker-selection pass
+  - backend reconstructs exact excerpts and markers from backend-owned candidate IDs, which keeps excerpts and marker offsets deterministic
   - successful outputs are persisted in `Editions`, `Stories`, `StorySides`, and `StoryArticles`
 - A manual publish stage marks an edition live:
   - `POST /api/ops/editions/{id}/publish` archives the previous live edition and marks the target edition `live`
@@ -159,11 +161,12 @@ Current implementation already supports this stage as a manual admin operation. 
 Current implementation already supports this stage as a manual admin operation. The target state is to run the same synthesis logic inside the scheduled orchestration.
 
 - For each qualifying cluster, sends article texts to GPT-4o with a structured prompt
-- Generates:
+- Generates a first-pass story draft:
   - Central synthesis (calm, factual, ~150-300 words in Polish)
-  - Markers: phrases in the synthesis that reveal framing differences
-  - Left perspective: summary + cited excerpts from left-camp articles
-  - Right perspective: summary + cited excerpts from right-camp articles
+  - Left perspective summary + selected excerpt snippet IDs from left-camp candidate snippets
+  - Right perspective summary + selected excerpt snippet IDs from right-camp candidate snippets
+- Builds exact marker candidates from the final synthesis text and runs a second model call that selects marker candidate IDs
+- Resolves exact excerpts and markers from backend-owned candidate IDs rather than trusting freeform quoted spans
 - Stores as a Story with associated StorySides in Azure SQL Database
 - Creates an Edition record linking all stories for this cycle
 
@@ -353,6 +356,7 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 2. **Phase 2: Article preparation and embeddings** — Run all scraped articles through LLM-first cleanup/extraction, classify probable non-articles, and persist native Azure SQL `vector(1536)` embeddings from cleaned text.
 3. **Phase 3: Clustering** — Implemented as a manual candidate-clustering slice that forms ranked cross-camp candidate story clusters from prepared article embeddings and persists them for later synthesis.
 4. **Phase 4: Synthesis, manual publish, and content API** — Implemented as a backend slice that generates validated story syntheses from qualified candidate clusters, persists editions and stories, supports manual edition publishing, and exposes the read API for future frontend consumers.
+Current implementation uses a two-pass synthesis contract: backend-owned excerpt snippets are selected during draft generation, then backend-owned marker candidates are selected from the final synthesis text to keep excerpts and marker offsets deterministic.
 5. **Phase 5: Frontend and automation** — Remaining target state: frontend implementation, automated frontend publishing, repository dispatch integration, and Durable orchestration.
 
 ## Key Design Decisions
@@ -410,7 +414,7 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `Synthesis:MaxArticlesPerCamp` | Max articles from each camp included in one synthesis prompt |
 | `Synthesis:MaxInputCharactersPerArticle` | Max cleaned-text characters included per article in the synthesis prompt |
 | `Synthesis:MaxMarkers` | Max marker phrases allowed in one generated story |
-| `Synthesis:RequireVerbatimExcerpts` | Whether cited excerpts must match article text verbatim |
+| `Synthesis:RequireVerbatimExcerpts` | Legacy setting from the earlier freeform-excerpt validation path; current synthesis uses excerpt snippet IDs instead |
 | `Pipeline:CronSchedule` | Timer trigger CRON (default: `0 0 5,17 * * *`) |
 | `GitHub:Token` | For triggering frontend rebuild |
 | `GitHub:RepoOwner` | Repository owner |

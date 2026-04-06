@@ -69,7 +69,7 @@ curl -X POST http://localhost:7071/api/ops/synthesis/run \
 curl -X POST http://localhost:7071/api/ops/editions/<edition-guid>/publish
 ```
 
-Current backend scope includes raw ingestion, article preparation (LLM-first cleanup/extraction, cleanup classification, and embedding preparation), candidate clustering, manual synthesis, manual edition publishing, and read-side content API endpoints. Durable orchestration, frontend implementation, and automated frontend publishing are still planned but not implemented yet.
+Current backend scope includes raw ingestion, article preparation (LLM-first cleanup/extraction, cleanup classification, and embedding preparation), candidate clustering, manual synthesis, manual edition publishing, and read-side content API endpoints. The current synthesis flow uses backend-owned excerpt snippets and backend-owned marker candidates to keep quoted evidence and marker offsets deterministic. Durable orchestration, frontend implementation, and automated frontend publishing are still planned but not implemented yet.
 
 Cloud deployment currently targets Azure Functions Flex Consumption, Azure SQL Database, and Azure Key Vault without VNet/private endpoints. EF migrations are triggered through a function-key-protected admin endpoint after deploy.
 
