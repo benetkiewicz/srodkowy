@@ -22,7 +22,7 @@ public sealed class StorySynthesisServiceTests
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId)));
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId)));
 
         var result = await service.RunAsync(
             "test",
@@ -53,16 +53,18 @@ public sealed class StorySynthesisServiceTests
     }
 
     [Fact]
-    public async Task RunAsync_skips_story_when_marker_phrase_is_missing_from_synthesis()
+    public async Task RunAsync_skips_story_when_marker_candidate_id_is_invalid()
     {
         var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
-            {
-                Markers = [new StorySynthesisMarkerResponse("nieobecna fraza", "framing", "Opis")]
-            }));
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(
+                request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId),
+                request => new StorySynthesisMarkerSelectionResponse(
+                [
+                    new StorySynthesisMarkerSelectionItem("missing-marker-candidate", "framing", "Opis")
+                ])));
 
         var result = await service.RunAsync(
             "test",
@@ -84,7 +86,7 @@ public sealed class StorySynthesisServiceTests
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId) with
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
@@ -107,7 +109,7 @@ public sealed class StorySynthesisServiceTests
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId) with
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
@@ -130,7 +132,7 @@ public sealed class StorySynthesisServiceTests
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId) with
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
@@ -153,7 +155,7 @@ public sealed class StorySynthesisServiceTests
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId) with
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
@@ -179,7 +181,7 @@ public sealed class StorySynthesisServiceTests
             leftCleanedContentText: "Lewy cytat tylko po cleanupie oraz dalsza analiza wydarzen.");
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId) with
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
@@ -215,7 +217,7 @@ public sealed class StorySynthesisServiceTests
             leftCleanedContentText: "Lewy portal\u00A0nazwal to \u201Enowym porzadkiem\u201D \u2014\n i wskazal dalszy plan.");
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidResponse(request, setup.LeftArticleId, setup.RightArticleId) with
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId) with
             {
                 Left = new StorySynthesisSideResponse(
                     "Lewa narracja",
@@ -238,16 +240,20 @@ public sealed class StorySynthesisServiceTests
         var setup = await SeedSingleClusterAsync(dbContextOptions);
         var service = CreateService(
             dbContextOptions,
-            new StoryPublishingTestSupport.FakeStorySynthesisModel(request => new StorySynthesisModelResponse(
-                "Spor o projekt ustawy",
-                "W centrum debaty pozostaje \u201Enapiecie\u201D \u2014 polityczne wokol projektu ustawy i sposobu jego procedowania przez obie strony.",
-                [new StorySynthesisMarkerResponse("\"napiecie\" - polityczne", "framing", "Obie strony inaczej opisuja skale sporu.")],
-                new StorySynthesisSideResponse(
-                    "Lewa narracja",
-                    [GetFirstSnippetId(request, setup.LeftArticleId)]),
-                new StorySynthesisSideResponse(
-                    "Prawa narracja",
-                    [GetFirstSnippetId(request, setup.RightArticleId)]))));
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(
+                request => new StorySynthesisDraftResponse(
+                    "Spor o projekt ustawy",
+                    "W centrum debaty pozostaje \u201Enapiecie\u201D \u2014 polityczne wokol projektu ustawy i sposobu jego procedowania przez obie strony.",
+                    new StorySynthesisSideResponse(
+                        "Lewa narracja",
+                        [GetFirstSnippetId(request, setup.LeftArticleId)]),
+                    new StorySynthesisSideResponse(
+                        "Prawa narracja",
+                        [GetFirstSnippetId(request, setup.RightArticleId)])),
+                request => new StorySynthesisMarkerSelectionResponse(
+                [
+                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napiecie” — polityczne"), "framing", "Obie strony inaczej opisuja skale sporu.")
+                ])));
 
         var result = await service.RunAsync(
             "test",
@@ -263,7 +269,7 @@ public sealed class StorySynthesisServiceTests
         var markers = JsonSerializer.Deserialize<List<StoryMarkerDto>>(edition.Stories.Single().MarkersJson, SerializerOptions);
 
         markers.Should().ContainSingle();
-        markers![0].Phrase.Should().Be("\u201Enapiecie\u201D \u2014 polityczne");
+        markers![0].Phrase.Should().Be("napiecie\u201D \u2014 polityczne");
         markers[0].StartOffset.Should().BeGreaterThanOrEqualTo(0);
         markers[0].Length.Should().Be(markers[0].Phrase.Length);
     }
@@ -280,12 +286,11 @@ public sealed class StorySynthesisServiceTests
             NullLogger<StorySynthesisService>.Instance);
     }
 
-    private static StorySynthesisModelResponse CreateValidResponse(StorySynthesisModelRequest request, Guid leftArticleId, Guid rightArticleId)
+    private static StorySynthesisDraftResponse CreateValidDraftResponse(StorySynthesisDraftRequest request, Guid leftArticleId, Guid rightArticleId)
     {
-        return new StorySynthesisModelResponse(
+        return new StorySynthesisDraftResponse(
             "Spór o projekt ustawy",
             "W centrum debaty pozostaje napięcie polityczne wokół projektu ustawy i sposobu jego procedowania przez obie strony.",
-            [new StorySynthesisMarkerResponse("napięcie polityczne", "framing", "Obie strony inaczej opisują skalę sporu.")],
             new StorySynthesisSideResponse(
                 "Lewa narracja",
                 [GetFirstSnippetId(request, leftArticleId)]),
@@ -294,9 +299,14 @@ public sealed class StorySynthesisServiceTests
                 [GetFirstSnippetId(request, rightArticleId)]));
     }
 
-    private static string GetFirstSnippetId(StorySynthesisModelRequest request, Guid articleId)
+    private static string GetFirstSnippetId(StorySynthesisDraftRequest request, Guid articleId)
     {
         return request.ExcerptCandidates.First(candidate => candidate.ArticleId == articleId).SnippetId;
+    }
+
+    private static string GetMarkerCandidateId(StorySynthesisMarkerSelectionRequest request, string exactText)
+    {
+        return request.MarkerCandidates.First(candidate => string.Equals(candidate.Text, exactText, StringComparison.Ordinal)).MarkerCandidateId;
     }
 
     private static async Task<ClusterSetup> SeedSingleClusterAsync(

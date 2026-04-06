@@ -5,21 +5,30 @@ namespace Srodkowy.Functions.Services;
 
 public interface IStorySynthesisModel
 {
-    Task<StorySynthesisModelResponse> SynthesizeAsync(StorySynthesisModelRequest request, CancellationToken cancellationToken);
+    Task<StorySynthesisDraftResponse> SynthesizeDraftAsync(StorySynthesisDraftRequest request, CancellationToken cancellationToken);
+
+    Task<StorySynthesisMarkerSelectionResponse> SelectMarkersAsync(StorySynthesisMarkerSelectionRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class OpenAiStorySynthesisModel(IChatClient chatClient) : IStorySynthesisModel
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<StorySynthesisModelResponse> SynthesizeAsync(StorySynthesisModelRequest request, CancellationToken cancellationToken)
+    public async Task<StorySynthesisDraftResponse> SynthesizeDraftAsync(StorySynthesisDraftRequest request, CancellationToken cancellationToken)
     {
-        var prompt = BuildPrompt(request);
-        var response = await chatClient.GetResponseAsync<StorySynthesisModelResponse>(prompt, cancellationToken: cancellationToken);
+        var prompt = BuildDraftPrompt(request);
+        var response = await chatClient.GetResponseAsync<StorySynthesisDraftResponse>(prompt, cancellationToken: cancellationToken);
         return response.Result;
     }
 
-    private static string BuildPrompt(StorySynthesisModelRequest request)
+    public async Task<StorySynthesisMarkerSelectionResponse> SelectMarkersAsync(StorySynthesisMarkerSelectionRequest request, CancellationToken cancellationToken)
+    {
+        var prompt = BuildMarkerPrompt(request);
+        var response = await chatClient.GetResponseAsync<StorySynthesisMarkerSelectionResponse>(prompt, cancellationToken: cancellationToken);
+        return response.Result;
+    }
+
+    private static string BuildDraftPrompt(StorySynthesisDraftRequest request)
     {
         var payload = JsonSerializer.Serialize(request, SerializerOptions);
 
@@ -29,7 +38,6 @@ You generate Polish story packages for a news product that compares how left and
 Return strict JSON with this shape:
 - headline: string
 - synthesis: string
-- markers: array of objects with phrase, kind, explanation
 - left: object with summary and excerptSnippetIds
 - right: object with summary and excerptSnippetIds
 
@@ -39,18 +47,35 @@ Rules:
 - do not fact-check, moralize, speculate about motives, or pick a side
 - headline should be concise and neutral
 - synthesis should be about 150-300 words
-- return between 1 and {request.MaxMarkers} markers
-- each marker phrase must be copied exactly from the synthesis text as one contiguous substring
-- marker phrases should be short and specific
 - left.excerptSnippetIds and right.excerptSnippetIds must contain only snippet IDs from ExcerptCandidates
 - do not generate, rewrite, shorten, or edit excerpt text
 - every selected snippet must come from the matching camp
 - do not invent articleIds, sources, snippet IDs, quotes, or facts
-- do not normalize, shorten, paraphrase, inflect, or translate marker phrases
-- before returning, verify that every marker phrase appears literally inside synthesis; if not, omit that marker
 - before returning, verify that every selected excerptSnippetId exists in ExcerptCandidates; if not, omit it
-- do not change quotation marks, dashes, casing, or punctuation inside copied marker phrases
 - left and right summaries should describe the narrative framing of that camp, not the truth of the event
+
+Input JSON:
+{payload}
+""";
+    }
+
+    private static string BuildMarkerPrompt(StorySynthesisMarkerSelectionRequest request)
+    {
+        var payload = JsonSerializer.Serialize(request, SerializerOptions);
+
+        return $"""
+You select exact marker spans from a finished Polish synthesis.
+
+Return strict JSON with this shape:
+- markers: array of objects with markerCandidateId, kind, explanation
+
+Rules:
+- return between 1 and {request.MaxMarkers} markers
+- choose only markerCandidateIds from MarkerCandidates
+- do not invent marker text or candidate IDs
+- each selected marker should highlight wording that reveals framing, emphasis, contrast, agency, scale, or conflict
+- keep explanation short and factual in Polish
+- if a candidate does not fit, omit it
 
 Input JSON:
 {payload}
@@ -58,10 +83,9 @@ Input JSON:
     }
 }
 
-public sealed record StorySynthesisModelRequest(
+public sealed record StorySynthesisDraftRequest(
     Guid CandidateClusterId,
     int Rank,
-    int MaxMarkers,
     IReadOnlyList<StorySynthesisArticleInput> Articles,
     IReadOnlyList<StorySynthesisExcerptCandidateInput> ExcerptCandidates);
 
@@ -81,15 +105,31 @@ public sealed record StorySynthesisExcerptCandidateInput(
     string SourceName,
     string Text);
 
-public sealed record StorySynthesisModelResponse(
+public sealed record StorySynthesisDraftResponse(
     string Headline,
     string Synthesis,
-    IReadOnlyList<StorySynthesisMarkerResponse>? Markers,
     StorySynthesisSideResponse? Left,
     StorySynthesisSideResponse? Right);
 
-public sealed record StorySynthesisMarkerResponse(
-    string Phrase,
+public sealed record StorySynthesisMarkerSelectionRequest(
+    Guid CandidateClusterId,
+    int MaxMarkers,
+    string Synthesis,
+    string LeftSummary,
+    string RightSummary,
+    IReadOnlyList<StorySynthesisMarkerCandidateInput> MarkerCandidates);
+
+public sealed record StorySynthesisMarkerCandidateInput(
+    string MarkerCandidateId,
+    string Text,
+    int StartOffset,
+    int Length);
+
+public sealed record StorySynthesisMarkerSelectionResponse(
+    IReadOnlyList<StorySynthesisMarkerSelectionItem>? Markers);
+
+public sealed record StorySynthesisMarkerSelectionItem(
+    string MarkerCandidateId,
     string Kind,
     string Explanation);
 

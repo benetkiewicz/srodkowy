@@ -113,9 +113,23 @@ internal static class StoryPublishingTestSupport
             Task.FromResult(new SrodkowyDbContext(options));
     }
 
-    public sealed class FakeStorySynthesisModel(Func<StorySynthesisModelRequest, StorySynthesisModelResponse> responder) : IStorySynthesisModel
+    public sealed class FakeStorySynthesisModel(
+        Func<StorySynthesisDraftRequest, StorySynthesisDraftResponse> draftResponder,
+        Func<StorySynthesisMarkerSelectionRequest, StorySynthesisMarkerSelectionResponse>? markerResponder = null) : IStorySynthesisModel
     {
-        public Task<StorySynthesisModelResponse> SynthesizeAsync(StorySynthesisModelRequest request, CancellationToken cancellationToken) =>
-            Task.FromResult(responder(request));
+        public Task<StorySynthesisDraftResponse> SynthesizeDraftAsync(StorySynthesisDraftRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(draftResponder(request));
+
+        public Task<StorySynthesisMarkerSelectionResponse> SelectMarkersAsync(StorySynthesisMarkerSelectionRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult((markerResponder ?? DefaultMarkerResponder)(request));
+
+        private static StorySynthesisMarkerSelectionResponse DefaultMarkerResponder(StorySynthesisMarkerSelectionRequest request)
+        {
+            return new StorySynthesisMarkerSelectionResponse(
+                request.MarkerCandidates
+                    .Take(request.MaxMarkers)
+                    .Select(candidate => new StorySynthesisMarkerSelectionItem(candidate.MarkerCandidateId, "framing", "Domyslne wyjasnienie testowe."))
+                    .ToList());
+        }
     }
 }

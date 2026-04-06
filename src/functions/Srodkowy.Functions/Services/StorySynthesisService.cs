@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
@@ -21,9 +20,15 @@ public sealed class StorySynthesisService(
     private static readonly ActivitySource ActivitySource = new(ObservabilityOptions.ChatSourceName);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
     private static readonly Regex SentenceCandidateRegex = new(@".+?(?:[.!?…]+(?:[\""'”’)]*)?(?=\s|$)|$)", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex MarkerTokenRegex = new(@"[\p{L}\p{Mn}\p{Nd}%]+(?:[-/][\p{L}\p{Mn}\p{Nd}%]+)*", RegexOptions.Compiled);
     private const int MaxExcerptCandidatesPerArticle = 4;
     private const int MinExcerptCandidateLength = 45;
     private const int MaxExcerptCandidateLength = 320;
+    private const int MinMarkerWords = 2;
+    private const int MaxMarkerWords = 6;
+    private const int MinMarkerLength = 12;
+    private const int MaxMarkerLength = 80;
+    private const int MaxMarkerCandidates = 120;
 
     public async Task<SynthesisRunResult> RunAsync(string triggeredBy, SynthesisRunRequest request, CancellationToken cancellationToken)
     {
@@ -168,11 +173,27 @@ public sealed class StorySynthesisService(
     {
         var selectedArticles = SelectArticles(cluster);
         var excerptCandidates = BuildExcerptCandidates(selectedArticles);
-        var prompt = new StorySynthesisModelRequest(cluster.Id, cluster.Rank, options.Value.MaxMarkers, selectedArticles, excerptCandidates.Select(MapExcerptCandidate).ToList());
-        var modelResponse = await synthesisModel.SynthesizeAsync(prompt, cancellationToken);
-        var validated = Validate(cluster, excerptCandidates, modelResponse);
+        var draftRequest = new StorySynthesisDraftRequest(cluster.Id, cluster.Rank, selectedArticles, excerptCandidates.Select(MapExcerptCandidate).ToList());
+        var draftResponse = await synthesisModel.SynthesizeDraftAsync(draftRequest, cancellationToken);
+        var draft = ValidateDraft(cluster, excerptCandidates, draftResponse);
 
-        if (validated is null)
+        if (draft is null)
+        {
+            return null;
+        }
+
+        var markerCandidates = BuildMarkerCandidates(draft.Synthesis);
+        var markerRequest = new StorySynthesisMarkerSelectionRequest(
+            cluster.Id,
+            options.Value.MaxMarkers,
+            draft.Synthesis,
+            draft.Left.Summary,
+            draft.Right.Summary,
+            markerCandidates.Select(MapMarkerCandidate).ToList());
+        var markerResponse = await synthesisModel.SelectMarkersAsync(markerRequest, cancellationToken);
+        var markers = ValidateMarkers(cluster, draft.Synthesis, markerCandidates, markerResponse);
+
+        if (markers is null)
         {
             return null;
         }
@@ -183,24 +204,24 @@ public sealed class StorySynthesisService(
             EditionId = editionId,
             CandidateClusterId = cluster.Id,
             Rank = cluster.Rank,
-            Headline = validated.Headline,
-            Synthesis = validated.Synthesis,
-            MarkersJson = JsonSerializer.Serialize(validated.Markers, SerializerOptions),
+            Headline = draft.Headline,
+            Synthesis = draft.Synthesis,
+            MarkersJson = JsonSerializer.Serialize(markers, SerializerOptions),
             Sides =
             [
                 new StorySide
                 {
                     Id = Guid.NewGuid(),
                     Camp = SourceCamp.Left,
-                    Summary = validated.Left.Summary,
-                    ExcerptsJson = JsonSerializer.Serialize(validated.Left.Excerpts, SerializerOptions)
+                    Summary = draft.Left.Summary,
+                    ExcerptsJson = JsonSerializer.Serialize(draft.Left.Excerpts, SerializerOptions)
                 },
                 new StorySide
                 {
                     Id = Guid.NewGuid(),
                     Camp = SourceCamp.Right,
-                    Summary = validated.Right.Summary,
-                    ExcerptsJson = JsonSerializer.Serialize(validated.Right.Excerpts, SerializerOptions)
+                    Summary = draft.Right.Summary,
+                    ExcerptsJson = JsonSerializer.Serialize(draft.Right.Excerpts, SerializerOptions)
                 }
             ],
             StoryArticles = cluster.Articles
@@ -292,10 +313,70 @@ public sealed class StorySynthesisService(
             candidate.Text);
     }
 
-    private ValidatedStory? Validate(
+    private static List<MarkerCandidate> BuildMarkerCandidates(string synthesis)
+    {
+        var candidates = new List<MarkerCandidate>();
+        var seenTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match sentenceMatch in SentenceCandidateRegex.Matches(synthesis))
+        {
+            if (!sentenceMatch.Success)
+            {
+                continue;
+            }
+
+            var sentence = sentenceMatch.Value;
+            var tokens = MarkerTokenRegex.Matches(sentence)
+                .Cast<Match>()
+                .ToList();
+
+            for (var wordCount = MinMarkerWords; wordCount <= MaxMarkerWords; wordCount++)
+            {
+                for (var startIndex = 0; startIndex <= tokens.Count - wordCount; startIndex++)
+                {
+                    var firstToken = tokens[startIndex];
+                    var lastToken = tokens[startIndex + wordCount - 1];
+                    var relativeStart = firstToken.Index;
+                    var relativeEnd = lastToken.Index + lastToken.Length;
+                    var rawText = sentence[relativeStart..relativeEnd].Trim();
+
+                    if (rawText.Length < MinMarkerLength || rawText.Length > MaxMarkerLength)
+                    {
+                        continue;
+                    }
+
+                    if (!seenTexts.Add(rawText))
+                    {
+                        continue;
+                    }
+
+                    var startOffset = sentenceMatch.Index + relativeStart;
+                    candidates.Add(new MarkerCandidate($"M{candidates.Count + 1}", rawText, startOffset, rawText.Length));
+
+                    if (candidates.Count >= MaxMarkerCandidates)
+                    {
+                        return candidates;
+                    }
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    private static StorySynthesisMarkerCandidateInput MapMarkerCandidate(MarkerCandidate candidate)
+    {
+        return new StorySynthesisMarkerCandidateInput(
+            candidate.MarkerCandidateId,
+            candidate.Text,
+            candidate.StartOffset,
+            candidate.Length);
+    }
+
+    private ValidatedDraft? ValidateDraft(
         CandidateCluster cluster,
         IReadOnlyList<ExcerptCandidate> excerptCandidates,
-        StorySynthesisModelResponse response)
+        StorySynthesisDraftResponse response)
     {
         if (string.IsNullOrWhiteSpace(response.Headline) || string.IsNullOrWhiteSpace(response.Synthesis))
         {
@@ -331,6 +412,35 @@ public sealed class StorySynthesisService(
             return null;
         }
 
+        var articleById = cluster.Articles.ToDictionary(clusterArticle => clusterArticle.ArticleId);
+        var excerptCandidateById = excerptCandidates.ToDictionary(candidate => candidate.SnippetId, StringComparer.OrdinalIgnoreCase);
+        var left = ValidateSide(cluster, SourceCamp.Left, response.Left, articleById, excerptCandidateById);
+
+        if (left is null)
+        {
+            return null;
+        }
+
+        var right = ValidateSide(cluster, SourceCamp.Right, response.Right, articleById, excerptCandidateById);
+
+        if (right is null)
+        {
+            return null;
+        }
+
+        return new ValidatedDraft(
+            response.Headline.Trim(),
+            response.Synthesis.Trim(),
+            left,
+            right);
+    }
+
+    private IReadOnlyList<StoryMarkerDto>? ValidateMarkers(
+        CandidateCluster cluster,
+        string synthesis,
+        IReadOnlyList<MarkerCandidate> markerCandidates,
+        StorySynthesisMarkerSelectionResponse response)
+    {
         var markers = response.Markers?
             .Where(marker => marker is not null)
             .Select(marker => marker!)
@@ -348,75 +458,58 @@ public sealed class StorySynthesisService(
             return null;
         }
 
+        var markerCandidateById = markerCandidates.ToDictionary(candidate => candidate.MarkerCandidateId, StringComparer.OrdinalIgnoreCase);
+        var seenCandidateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var persistedMarkers = new List<StoryMarkerDto>(markers.Count);
-        var seenPhrases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var marker in markers)
         {
-            if (string.IsNullOrWhiteSpace(marker.Phrase) || !seenPhrases.Add(marker.Phrase.Trim()))
+            if (string.IsNullOrWhiteSpace(marker.MarkerCandidateId) || !seenCandidateIds.Add(marker.MarkerCandidateId.Trim()))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerCandidateId {MarkerCandidateId}",
                     cluster.Id,
                     cluster.Rank,
-                    "blank_or_duplicate_marker_phrase",
-                    marker.Phrase);
+                    "blank_or_duplicate_marker_candidate_id",
+                    marker.MarkerCandidateId);
                 return null;
             }
 
-            var phrase = marker.Phrase.Trim();
-            if (!TryFindNormalizedSpan(response.Synthesis, phrase, out var markerMatch))
+            var markerCandidateId = marker.MarkerCandidateId.Trim();
+
+            if (!markerCandidateById.TryGetValue(markerCandidateId, out var markerCandidate))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerCandidateId {MarkerCandidateId}",
                     cluster.Id,
                     cluster.Rank,
-                    "marker_phrase_not_in_synthesis",
-                    phrase);
+                    "invalid_marker_candidate_id",
+                    markerCandidateId);
                 return null;
             }
 
-            if (!ContainsLiteral(response.Synthesis, phrase))
+            if (markerCandidate.StartOffset < 0
+                || markerCandidate.StartOffset + markerCandidate.Length > synthesis.Length
+                || !string.Equals(synthesis.Substring(markerCandidate.StartOffset, markerCandidate.Length), markerCandidate.Text, StringComparison.Ordinal))
             {
                 logger.LogWarning(
-                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerPhrase {MarkerPhrase} normalizedStartOffset {NormalizedStartOffset}",
+                    "Synthesis validation rejected cluster {CandidateClusterId} rank {Rank} reason {ReasonCode} markerCandidateId {MarkerCandidateId}",
                     cluster.Id,
                     cluster.Rank,
-                    "marker_phrase_only_matches_normalized_text",
-                    phrase,
-                    markerMatch.StartOffset);
+                    "marker_candidate_span_invalid",
+                    markerCandidateId);
+                return null;
             }
 
             persistedMarkers.Add(new StoryMarkerDto(
-                markerMatch.RawText,
-                markerMatch.StartOffset,
-                markerMatch.Length,
+                markerCandidate.Text,
+                markerCandidate.StartOffset,
+                markerCandidate.Length,
                 marker.Kind?.Trim() ?? string.Empty,
                 marker.Explanation?.Trim() ?? string.Empty));
         }
 
-        var articleById = cluster.Articles.ToDictionary(clusterArticle => clusterArticle.ArticleId);
-        var excerptCandidateById = excerptCandidates.ToDictionary(candidate => candidate.SnippetId, StringComparer.OrdinalIgnoreCase);
-        var left = ValidateSide(cluster, SourceCamp.Left, response.Left, articleById, excerptCandidateById);
-
-        if (left is null)
-        {
-            return null;
-        }
-
-        var right = ValidateSide(cluster, SourceCamp.Right, response.Right, articleById, excerptCandidateById);
-
-        if (right is null)
-        {
-            return null;
-        }
-
-        return new ValidatedStory(
-            response.Headline.Trim(),
-            response.Synthesis.Trim(),
-            persistedMarkers,
-            left,
-            right);
+        return persistedMarkers;
     }
 
     private ValidatedSide? ValidateSide(
@@ -509,102 +602,6 @@ public sealed class StorySynthesisService(
         return new ValidatedSide(side.Summary.Trim(), persistedExcerpts);
     }
 
-    private static bool ContainsLiteral(string sourceText, string phrase)
-    {
-        return sourceText.IndexOf(phrase, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    private static bool ContainsNormalized(string? sourceText, string excerptText)
-    {
-        return TryFindNormalizedSpan(sourceText, excerptText, out _);
-    }
-
-    private static bool TryFindNormalizedSpan(string? sourceText, string excerptText, out NormalizedSpanMatch match)
-    {
-        match = new NormalizedSpanMatch(0, 0, string.Empty);
-
-        if (string.IsNullOrWhiteSpace(sourceText) || string.IsNullOrWhiteSpace(excerptText))
-        {
-            return false;
-        }
-
-        var normalizedSource = BuildNormalizedTextMap(sourceText);
-        var normalizedExcerpt = BuildNormalizedTextMap(excerptText);
-
-        if (normalizedSource.Text.Length == 0 || normalizedExcerpt.Text.Length == 0)
-        {
-            return false;
-        }
-
-        var normalizedIndex = normalizedSource.Text.IndexOf(normalizedExcerpt.Text, StringComparison.OrdinalIgnoreCase);
-
-        if (normalizedIndex < 0)
-        {
-            return false;
-        }
-
-        var startOffset = normalizedSource.RawIndexMap[normalizedIndex];
-        var endOffset = normalizedSource.RawIndexMap[normalizedIndex + normalizedExcerpt.Text.Length - 1];
-        var length = (endOffset - startOffset) + 1;
-        match = new NormalizedSpanMatch(startOffset, length, sourceText.Substring(startOffset, length));
-        return true;
-    }
-
-    private static NormalizedTextMap BuildNormalizedTextMap(string value)
-    {
-        var text = new StringBuilder(value.Length);
-        var rawIndexMap = new List<int>(value.Length);
-        var lastWasSpace = true;
-
-        for (var index = 0; index < value.Length; index++)
-        {
-            var rawChar = value[index];
-
-            if (char.IsWhiteSpace(rawChar) || rawChar == '\u00A0')
-            {
-                if (lastWasSpace)
-                {
-                    continue;
-                }
-
-                text.Append(' ');
-                rawIndexMap.Add(index);
-                lastWasSpace = true;
-                continue;
-            }
-
-            var normalizedChunk = NormalizeCharacter(rawChar);
-
-            foreach (var normalizedChar in normalizedChunk)
-            {
-                text.Append(normalizedChar);
-                rawIndexMap.Add(index);
-            }
-
-            lastWasSpace = false;
-        }
-
-        if (text.Length > 0 && text[^1] == ' ')
-        {
-            text.Length--;
-            rawIndexMap.RemoveAt(rawIndexMap.Count - 1);
-        }
-
-        return new NormalizedTextMap(text.ToString(), rawIndexMap);
-    }
-
-    private static string NormalizeCharacter(char value)
-    {
-        return value switch
-        {
-            '\u2018' or '\u2019' or '\u201A' or '\u201B' or '\u2032' or '\u0060' => "'",
-            '\u201C' or '\u201D' or '\u201E' or '\u201F' or '\u2033' => "\"",
-            '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2015' or '\u2212' => "-",
-            '\u2026' => "...",
-            _ => value.ToString()
-        };
-    }
-
     private static string Truncate(string value, int maxLength)
     {
         return value.Length <= maxLength
@@ -626,10 +623,9 @@ public sealed class StorySynthesisService(
         IReadOnlyList<Guid> SkippedClusterIds,
         IReadOnlyList<string> Errors);
 
-    private sealed record ValidatedStory(
+    private sealed record ValidatedDraft(
         string Headline,
         string Synthesis,
-        IReadOnlyList<StoryMarkerDto> Markers,
         ValidatedSide Left,
         ValidatedSide Right);
 
@@ -645,7 +641,9 @@ public sealed class StorySynthesisService(
         string SourceUrl,
         string Text);
 
-    private sealed record NormalizedTextMap(string Text, IReadOnlyList<int> RawIndexMap);
-
-    private sealed record NormalizedSpanMatch(int StartOffset, int Length, string RawText);
+    private sealed record MarkerCandidate(
+        string MarkerCandidateId,
+        string Text,
+        int StartOffset,
+        int Length);
 }
