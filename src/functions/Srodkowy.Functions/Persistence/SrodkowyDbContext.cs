@@ -21,6 +21,14 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
 
     public DbSet<CandidateClusterArticle> CandidateClusterArticles => Set<CandidateClusterArticle>();
 
+    public DbSet<Edition> Editions => Set<Edition>();
+
+    public DbSet<Story> Stories => Set<Story>();
+
+    public DbSet<StorySide> StorySides => Set<StorySide>();
+
+    public DbSet<StoryArticle> StoryArticles => Set<StoryArticle>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         var sourceBuilder = modelBuilder.Entity<Source>();
@@ -149,6 +157,71 @@ public sealed class SrodkowyDbContext(DbContextOptions<SrodkowyDbContext> option
         candidateClusterArticleBuilder.HasOne(clusterArticle => clusterArticle.Article)
             .WithMany()
             .HasForeignKey(clusterArticle => clusterArticle.ArticleId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        var editionBuilder = modelBuilder.Entity<Edition>();
+        editionBuilder.ToTable("Editions");
+        editionBuilder.HasKey(edition => edition.Id);
+        editionBuilder.Property(edition => edition.CreatedAt).HasColumnType("datetimeoffset");
+        editionBuilder.Property(edition => edition.PublishedAt).HasColumnType("datetimeoffset");
+        editionBuilder.Property(edition => edition.Status)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .HasDefaultValue(EditionStatus.Building)
+            .IsRequired();
+        editionBuilder.Property(edition => edition.Cycle)
+            .HasConversion<string>()
+            .HasMaxLength(20)
+            .IsRequired();
+        editionBuilder.HasIndex(edition => edition.Status);
+        editionBuilder.HasIndex(edition => edition.PublishedAt);
+        editionBuilder.HasIndex(edition => edition.ClusterRunId);
+        editionBuilder.HasOne(edition => edition.ClusterRun)
+            .WithMany()
+            .HasForeignKey(edition => edition.ClusterRunId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        var storyBuilder = modelBuilder.Entity<Story>();
+        storyBuilder.ToTable("Stories");
+        storyBuilder.HasKey(story => story.Id);
+        storyBuilder.Property(story => story.Headline).HasMaxLength(500).IsRequired();
+        storyBuilder.Property(story => story.Synthesis).HasColumnType("nvarchar(max)").IsRequired();
+        storyBuilder.Property(story => story.MarkersJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        storyBuilder.HasIndex(story => story.EditionId);
+        storyBuilder.HasIndex(story => story.CandidateClusterId);
+        storyBuilder.HasIndex(story => story.Rank);
+        storyBuilder.HasOne(story => story.Edition)
+            .WithMany(edition => edition.Stories)
+            .HasForeignKey(story => story.EditionId)
+            .OnDelete(DeleteBehavior.Cascade);
+        storyBuilder.HasOne(story => story.CandidateCluster)
+            .WithMany()
+            .HasForeignKey(story => story.CandidateClusterId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        var storySideBuilder = modelBuilder.Entity<StorySide>();
+        storySideBuilder.ToTable("StorySides");
+        storySideBuilder.HasKey(side => side.Id);
+        storySideBuilder.Property(side => side.Camp).HasMaxLength(20).IsRequired();
+        storySideBuilder.Property(side => side.Summary).HasColumnType("nvarchar(max)").IsRequired();
+        storySideBuilder.Property(side => side.ExcerptsJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        storySideBuilder.HasIndex(side => side.StoryId);
+        storySideBuilder.HasOne(side => side.Story)
+            .WithMany(story => story.Sides)
+            .HasForeignKey(side => side.StoryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var storyArticleBuilder = modelBuilder.Entity<StoryArticle>();
+        storyArticleBuilder.ToTable("StoryArticles");
+        storyArticleBuilder.HasKey(storyArticle => new { storyArticle.StoryId, storyArticle.ArticleId });
+        storyArticleBuilder.HasIndex(storyArticle => storyArticle.ArticleId);
+        storyArticleBuilder.HasOne(storyArticle => storyArticle.Story)
+            .WithMany(story => story.StoryArticles)
+            .HasForeignKey(storyArticle => storyArticle.StoryId)
+            .OnDelete(DeleteBehavior.Cascade);
+        storyArticleBuilder.HasOne(storyArticle => storyArticle.Article)
+            .WithMany()
+            .HasForeignKey(storyArticle => storyArticle.ArticleId)
             .OnDelete(DeleteBehavior.NoAction);
     }
 

@@ -195,6 +195,36 @@ builder.Services
     });
 
 builder.Services
+    .AddOptions<SynthesisOptions>()
+    .Configure(options =>
+    {
+        if (int.TryParse(GetSetting(builder.Configuration, "Synthesis:MaxClustersPerRun"), out var maxClustersPerRun))
+        {
+            options.MaxClustersPerRun = maxClustersPerRun;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Synthesis:MaxArticlesPerCamp"), out var maxArticlesPerCamp))
+        {
+            options.MaxArticlesPerCamp = maxArticlesPerCamp;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Synthesis:MaxInputCharactersPerArticle"), out var maxInputCharactersPerArticle))
+        {
+            options.MaxInputCharactersPerArticle = maxInputCharactersPerArticle;
+        }
+
+        if (int.TryParse(GetSetting(builder.Configuration, "Synthesis:MaxMarkers"), out var maxMarkers))
+        {
+            options.MaxMarkers = maxMarkers;
+        }
+
+        if (bool.TryParse(GetSetting(builder.Configuration, "Synthesis:RequireVerbatimExcerpts"), out var requireVerbatimExcerpts))
+        {
+            options.RequireVerbatimExcerpts = requireVerbatimExcerpts;
+        }
+    });
+
+builder.Services
     .AddOptions<ObservabilityOptions>()
     .Configure(options =>
     {
@@ -225,10 +255,14 @@ builder.Services
     });
 
 builder.Services.AddOpenAiClients();
+builder.Services.AddSingleton<IStorySynthesisModel, OpenAiStorySynthesisModel>();
 builder.Services.AddScoped<IngestionService>();
 builder.Services.AddScoped<ArticleCleanupService>();
 builder.Services.AddScoped<EmbeddingService>();
 builder.Services.AddScoped<CandidateClusteringService>();
+builder.Services.AddScoped<StorySynthesisService>();
+builder.Services.AddScoped<EditionPublishingService>();
+builder.Services.AddScoped<ContentReadService>();
 
 builder.Build().Run();
 

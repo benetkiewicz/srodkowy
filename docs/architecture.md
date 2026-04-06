@@ -6,7 +6,7 @@
 
 ## Current Status
 
-Stage 0 is verified in Azure dev, and the next backend slices now include article preparation and candidate clustering.
+Stage 0 is verified in Azure dev, and the current backend slices now include article preparation, candidate clustering, manual synthesis, manual edition publishing, and read-side content APIs.
 
 - Azure Functions isolated worker solution runs on `.NET 10` under `src/functions`
 - EF Core 10 migrations are wired for SQL Server 2025 / Azure SQL
@@ -17,9 +17,12 @@ Stage 0 is verified in Azure dev, and the next backend slices now include articl
 - Manual article-cleanup and embedding-preparation endpoints are implemented in the backend
 - Manual candidate-clustering endpoint is implemented in the backend
 - Candidate cross-camp clusters are ranked and persisted in SQL as an intermediate pre-synthesis artifact
+- Manual synthesis builds editions and stories from qualified candidate clusters
+- Manual edition publishing is implemented in the backend
+- Read-side content API endpoints are implemented for editions, stories, and sources
 - Bicep and GitHub Actions scaffolding added for Azure deployment into `rg-srodkowy-pc`
 
-The following remain target-state only for now: synthesis, edition publishing, Durable orchestration, and read-side content API endpoints.
+The following remain target-state only for now: frontend implementation, automated frontend publishing, repository dispatch integration, and Durable orchestration.
 
 ## Current Deployment Model
 
@@ -67,9 +70,11 @@ srodkowy/
 │   │   │   ├── Configuration/             # Options classes, source registry
 │   │   │   ├── Admin/                     # Manual admin / operations endpoints
 │   │   │   ├── Ingestion/                 # Manual HTTP-triggered ingestion functions
-│   │   │   ├── Models/                    # Source, Article, IngestionRun, candidate clustering entities
+│   │   │   ├── Content/                   # Public read-side HTTP endpoints
+│   │   │   ├── Contracts/                 # Read DTOs
+│   │   │   ├── Models/                    # Source, Article, runs, clusters, editions, and stories
 │   │   │   ├── Persistence/               # DbContext, design-time factory, EF migrations
-│   │   │   ├── Services/                  # Firecrawl, ingestion, preparation, and candidate clustering services
+│   │   │   ├── Services/                  # Firecrawl, ingestion, preparation, clustering, synthesis, publish, and read services
 │   │   │   ├── Program.cs                 # Host builder + DI
 │   │   │   └── Srodkowy.Functions.csproj
 │   │   ├── Srodkowy.Functions.Tests/      # xUnit unit tests
@@ -106,6 +111,15 @@ srodkowy/
   - near-duplicate same-source articles are collapsed before clustering
   - in-memory agglomerative clustering forms ranked cross-camp candidate clusters persisted in `ClusterRuns`, `CandidateClusters`, and `CandidateClusterArticles`
   - qualified clusters are intermediate synthesis inputs, not yet published stories
+- Qualified clusters can then be turned into publishable content through a manual synthesis stage:
+  - `POST /api/ops/synthesis/run` selects qualified candidate clusters from one cluster run
+  - GPT-4o generates a Polish headline, central synthesis, markers, and left/right side summaries with cited excerpts
+  - backend validation ensures marker phrases appear in the synthesis and cited excerpts match cluster articles and camps
+  - successful outputs are persisted in `Editions`, `Stories`, `StorySides`, and `StoryArticles`
+- A manual publish stage marks an edition live:
+  - `POST /api/ops/editions/{id}/publish` archives the previous live edition and marks the target edition `live`
+- Read-side endpoints expose the published content:
+  - `GET /api/editions/current`, `GET /api/editions/{id}`, `GET /api/stories/{id}`, and `GET /api/sources`
 - Each run is tracked in `IngestionRuns`
 - Requests are processed sequentially and paced to stay within Firecrawl free-plan `/scrape` limits
 - Cloud deployments apply EF migrations through a dedicated admin-only HTTP function after code publish
@@ -142,6 +156,8 @@ Current implementation already supports this stage as a manual admin operation. 
 
 #### Step 4: Synthesis
 
+Current implementation already supports this stage as a manual admin operation. The target state is to run the same synthesis logic inside the scheduled orchestration.
+
 - For each qualifying cluster, sends article texts to GPT-4o with a structured prompt
 - Generates:
   - Central synthesis (calm, factual, ~150-300 words in Polish)
@@ -152,6 +168,8 @@ Current implementation already supports this stage as a manual admin operation. 
 - Creates an Edition record linking all stories for this cycle
 
 #### Step 5: Publish
+
+Current implementation already supports manual edition publishing and the read-side content API. The target state is to connect publish to frontend rebuild and deployment automation.
 
 - Marks the edition as `live` in the database
 - Triggers GitHub Actions workflow via repository dispatch
@@ -171,18 +189,15 @@ Current implementation already supports this stage as a manual admin operation. 
 | `POST /api/ops/articles/cleanup/run` | Run LLM-first article cleanup / preparation |
 | `POST /api/ops/articles/embeddings/run` | Generate embeddings from prepared article text |
 | `POST /api/ops/clusters/run` | Form and persist candidate cross-camp clusters from prepared article embeddings |
-| `POST /api/ops/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
-
-### Target Content API
-
-| Endpoint | Description |
-|---|---|
+| `POST /api/ops/synthesis/run` | Generate an edition and stories from qualified candidate clusters |
+| `POST /api/ops/editions/{id}/publish` | Mark a built edition as `live` and archive the previous live edition |
 | `GET /api/editions/current` | Current live edition with story summaries |
 | `GET /api/editions/{id}` | Specific edition |
 | `GET /api/stories/{id}` | Full story: synthesis, markers, both sides, source links |
 | `GET /api/sources` | Curated source list with camp assignments |
+| `POST /api/ops/migrations/apply` | Apply EF Core migrations when `Admin:Migrations:Enabled` is true |
 
-These target read endpoints will serve two consumers:
+These read endpoints serve two consumers:
 1. Astro build process (at build time)
 2. React islands (at runtime, for lazy-loaded side panels if needed)
 
@@ -294,41 +309,41 @@ The target database is Azure SQL Database, with local development using SQL Serv
 | SimilarityToRepresentative | float | Similarity against the representative article |
 | IsRepresentative | bit | Whether this article is the cluster representative |
 
-### Target Schema
-
 #### Editions
 | Column | Type | Description |
 |---|---|---|
-| id | uniqueidentifier | PK |
-| created_at | datetimeoffset | When the pipeline ran |
-| published_at | datetimeoffset | When the edition went live |
-| status | nvarchar(20) | `building`, `live`, `archived` |
-| cycle | nvarchar(20) | `morning` or `evening` |
+| Id | uniqueidentifier | PK |
+| ClusterRunId | uniqueidentifier | FK → ClusterRuns |
+| CreatedAt | datetimeoffset | When the synthesis run created the edition |
+| PublishedAt | datetimeoffset null | When the edition went live |
+| Status | nvarchar(20) | `building`, `live`, `archived`, `failed` |
+| Cycle | nvarchar(20) | `morning` or `evening` |
 
 #### Stories
 | Column | Type | Description |
 |---|---|---|
-| id | uniqueidentifier | PK |
-| edition_id | uniqueidentifier | FK → editions |
-| rank | int | Display order on homepage |
-| headline | nvarchar(500) | Generated headline |
-| synthesis | nvarchar(max) | Central synthesis text |
-| markers | nvarchar(max) | JSON array of marker objects with offsets and metadata |
+| Id | uniqueidentifier | PK |
+| EditionId | uniqueidentifier | FK → Editions |
+| CandidateClusterId | uniqueidentifier | FK → CandidateClusters |
+| Rank | int | Display order on homepage |
+| Headline | nvarchar(500) | Generated headline |
+| Synthesis | nvarchar(max) | Central synthesis text |
+| MarkersJson | nvarchar(max) | JSON array of marker objects with offsets and metadata |
 
 #### StorySides
 | Column | Type | Description |
 |---|---|---|
-| id | uniqueidentifier | PK |
-| story_id | uniqueidentifier | FK → stories |
-| camp | nvarchar(20) | `left` or `right` |
-| summary | nvarchar(max) | Camp-specific narrative summary |
-| excerpts | nvarchar(max) | JSON array of {text, source_name, source_url} |
+| Id | uniqueidentifier | PK |
+| StoryId | uniqueidentifier | FK → Stories |
+| Camp | nvarchar(20) | `left` or `right` |
+| Summary | nvarchar(max) | Camp-specific narrative summary |
+| ExcerptsJson | nvarchar(max) | JSON array of {articleId, text, sourceName, sourceUrl} |
 
 #### StoryArticles
 | Column | Type | Description |
 |---|---|---|
-| story_id | uniqueidentifier | FK → stories |
-| article_id | uniqueidentifier | FK → articles |
+| StoryId | uniqueidentifier | FK → Stories |
+| ArticleId | uniqueidentifier | FK → Articles |
 
 Exact similarity search can be implemented with Azure SQL vector functions for the curated MVP dataset. Approximate vector indexing exists in Azure SQL, but it is not required for the first backend slice.
 
@@ -337,7 +352,8 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 1. **Phase 1: Raw ingestion** — Implemented with Azure Functions, SQL Server / Azure SQL, EF Core migrations, seeded sources, Firecrawl scraping, and deduplicated raw article persistence.
 2. **Phase 2: Article preparation and embeddings** — Run all scraped articles through LLM-first cleanup/extraction, classify probable non-articles, and persist native Azure SQL `vector(1536)` embeddings from cleaned text.
 3. **Phase 3: Clustering** — Implemented as a manual candidate-clustering slice that forms ranked cross-camp candidate story clusters from prepared article embeddings and persists them for later synthesis.
-4. **Phase 4: Synthesis and content API** — Generate story syntheses, persist editions, stories, and story sides, and expose the read API for the frontend build.
+4. **Phase 4: Synthesis, manual publish, and content API** — Implemented as a backend slice that generates validated story syntheses from qualified candidate clusters, persists editions and stories, supports manual edition publishing, and exposes the read API for future frontend consumers.
+5. **Phase 5: Frontend and automation** — Remaining target state: frontend implementation, automated frontend publishing, repository dispatch integration, and Durable orchestration.
 
 ## Key Design Decisions
 
@@ -390,6 +406,11 @@ Exact similarity search can be implemented with Azure SQL vector functions for t
 | `Clustering:MaxClusterSize` | Max articles allowed in one candidate cluster |
 | `Clustering:MaxClusters` | Max qualified candidate clusters persisted per run |
 | `Clustering:ExcludeNeedsReview` | Whether clustering excludes `NeedsReview` articles by default |
+| `Synthesis:MaxClustersPerRun` | Max qualified candidate clusters processed in one synthesis run |
+| `Synthesis:MaxArticlesPerCamp` | Max articles from each camp included in one synthesis prompt |
+| `Synthesis:MaxInputCharactersPerArticle` | Max cleaned-text characters included per article in the synthesis prompt |
+| `Synthesis:MaxMarkers` | Max marker phrases allowed in one generated story |
+| `Synthesis:RequireVerbatimExcerpts` | Whether cited excerpts must match article text verbatim |
 | `Pipeline:CronSchedule` | Timer trigger CRON (default: `0 0 5,17 * * *`) |
 | `GitHub:Token` | For triggering frontend rebuild |
 | `GitHub:RepoOwner` | Repository owner |

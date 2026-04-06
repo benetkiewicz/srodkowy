@@ -4,6 +4,7 @@ using Microsoft.Data.SqlTypes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Srodkowy.Functions.Persistence;
 
@@ -12,9 +13,11 @@ using Srodkowy.Functions.Persistence;
 namespace Srodkowy.Functions.Persistence.Migrations
 {
     [DbContext(typeof(SrodkowyDbContext))]
-    partial class SrodkowyDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260406172829_AddStoryPublishing")]
+    partial class AddStoryPublishing
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
