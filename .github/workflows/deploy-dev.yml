@@ -34,6 +34,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+          cache: true
+          cache-dependency-path: |
+            src/functions/**/*.csproj
 
       - uses: azure/login@v2
         with:
@@ -73,11 +76,11 @@ jobs:
           print(f"FUNCTION_APP_HOSTNAME={outputs['functionAppHostname']['value']}")
           PY
 
-      - name: Build backend
-        run: dotnet build src/functions/Srodkowy.sln --configuration Release
+      - name: Restore function app
+        run: dotnet restore src/functions/Srodkowy.Functions/Srodkowy.Functions.csproj
 
       - name: Publish function app
-        run: dotnet publish src/functions/Srodkowy.Functions/Srodkowy.Functions.csproj --configuration Release --output ${{ env.PACKAGE_OUTPUT }}
+        run: dotnet publish src/functions/Srodkowy.Functions/Srodkowy.Functions.csproj --configuration Release --no-restore --output ${{ env.PACKAGE_OUTPUT }}
 
       - name: Deploy function app package
         uses: Azure/functions-action@v1.5.2

@@ -22,9 +22,15 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: |
+            src/functions/**/*.csproj
+
+      - name: Restore backend
+        run: dotnet restore src/functions/Srodkowy.sln
 
       - name: Build backend
-        run: dotnet build src/functions/Srodkowy.sln --configuration Release
+        run: dotnet build src/functions/Srodkowy.sln --configuration Release --no-restore
 
       - name: Test backend
-        run: dotnet test src/functions/Srodkowy.sln --configuration Release --no-build
+        run: dotnet test src/functions/Srodkowy.sln --configuration Release --no-build --no-restore
