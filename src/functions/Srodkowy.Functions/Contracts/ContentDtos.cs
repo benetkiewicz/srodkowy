@@ -27,12 +27,22 @@ public sealed record StoryDetailDto(
     StorySideDto Left,
     StorySideDto Right);
 
-public sealed record StoryMarkerDto(
-    string Phrase,
-    int StartOffset,
-    int Length,
-    string Kind,
-    string Explanation);
+public sealed record StoryMarkerDto
+{
+    public string Phrase { get; init; } = string.Empty;
+
+    public int StartOffset { get; init; }
+
+    public int Length { get; init; }
+
+    public string Kind { get; init; } = string.Empty;
+
+    public string Explanation { get; init; } = string.Empty;
+
+    public IReadOnlyList<StoryExcerptDto> LeftExcerpts { get; init; } = [];
+
+    public IReadOnlyList<StoryExcerptDto> RightExcerpts { get; init; } = [];
+}
 
 public sealed record StorySideDto(
     string Camp,

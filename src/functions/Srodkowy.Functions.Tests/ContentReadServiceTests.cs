@@ -53,6 +53,8 @@ public sealed class ContentReadServiceTests
 
         story.Should().NotBeNull();
         story!.Markers.Should().ContainSingle(marker => marker.Phrase == "napięcie polityczne");
+        story.Markers[0].LeftExcerpts.Should().ContainSingle(excerpt => excerpt.SourceName == "Lewy portal");
+        story.Markers[0].RightExcerpts.Should().ContainSingle(excerpt => excerpt.SourceName == "Prawy portal");
         story.Left.Excerpts.Should().ContainSingle(excerpt => excerpt.SourceName == "Lewy portal");
         story.Right.Excerpts.Should().ContainSingle(excerpt => excerpt.SourceName == "Prawy portal");
     }
@@ -134,7 +136,22 @@ public sealed class ContentReadServiceTests
                         Synthesis = "W centrum debaty pozostaje napięcie polityczne wokół projektu ustawy.",
                         MarkersJson = JsonSerializer.Serialize(new List<StoryMarkerDto>
                         {
-                            new("napięcie polityczne", 29, 18, "framing", "Opis")
+                            new()
+                            {
+                                Phrase = "napięcie polityczne",
+                                StartOffset = 29,
+                                Length = 18,
+                                Kind = "framing",
+                                Explanation = "Opis",
+                                LeftExcerpts =
+                                [
+                                    new(leftArticleId, "Lewy cytat", "Lewy portal", leftArticle.Url)
+                                ],
+                                RightExcerpts =
+                                [
+                                    new(rightArticleId, "Prawy cytat", "Prawy portal", rightArticle.Url)
+                                ]
+                            }
                         }),
                         Sides =
                         [

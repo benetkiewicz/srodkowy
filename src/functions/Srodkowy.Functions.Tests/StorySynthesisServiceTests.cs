@@ -50,6 +50,8 @@ public sealed class StorySynthesisServiceTests
 
         var markers = JsonSerializer.Deserialize<List<StoryMarkerDto>>(edition.Stories.Single().MarkersJson, SerializerOptions);
         markers.Should().ContainSingle(marker => marker!.Phrase == "napięcie polityczne");
+        markers![0].LeftExcerpts.Should().NotBeEmpty();
+        markers[0].RightExcerpts.Should().NotBeEmpty();
     }
 
     [Fact]
@@ -63,7 +65,7 @@ public sealed class StorySynthesisServiceTests
                 request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId),
                 request => new StorySynthesisMarkerSelectionResponse(
                 [
-                    new StorySynthesisMarkerSelectionItem("missing-marker-candidate", "framing", "Opis")
+                    new StorySynthesisMarkerSelectionItem("missing-marker-candidate", "framing", "Opis", [GetFirstSnippetId(request, SourceCamp.Left)], [GetFirstSnippetId(request, SourceCamp.Right)])
                 ])));
 
         var result = await service.RunAsync(
@@ -209,6 +211,116 @@ public sealed class StorySynthesisServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_persists_marker_with_left_only_supporting_excerpt()
+    {
+        var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
+        var setup = await SeedSingleClusterAsync(dbContextOptions);
+        var service = CreateService(
+            dbContextOptions,
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(
+                request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId),
+                request => new StorySynthesisMarkerSelectionResponse(
+                [
+                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napięcie polityczne"), "framing", "Lewa strona mocniej akcentuje ten fragment.", [GetFirstSnippetId(request, SourceCamp.Left)], [])
+                ])));
+
+        var result = await service.RunAsync(
+            "test",
+            new StorySynthesisService.SynthesisRunRequest(setup.ClusterRunId, null, "morning"),
+            CancellationToken.None);
+
+        result.StoryCount.Should().Be(1);
+
+        await using var verificationContext = StoryPublishingTestSupport.CreateDbContext(dbContextOptions);
+        var edition = await verificationContext.Editions
+            .Include(item => item.Stories)
+            .SingleAsync();
+        var markers = JsonSerializer.Deserialize<List<StoryMarkerDto>>(edition.Stories.Single().MarkersJson, SerializerOptions);
+
+        markers.Should().ContainSingle();
+        markers![0].LeftExcerpts.Should().ContainSingle();
+        markers[0].RightExcerpts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_persists_marker_with_right_only_supporting_excerpt()
+    {
+        var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
+        var setup = await SeedSingleClusterAsync(dbContextOptions);
+        var service = CreateService(
+            dbContextOptions,
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(
+                request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId),
+                request => new StorySynthesisMarkerSelectionResponse(
+                [
+                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napięcie polityczne"), "framing", "Prawa strona mocniej akcentuje ten fragment.", [], [GetFirstSnippetId(request, SourceCamp.Right)])
+                ])));
+
+        var result = await service.RunAsync(
+            "test",
+            new StorySynthesisService.SynthesisRunRequest(setup.ClusterRunId, null, "morning"),
+            CancellationToken.None);
+
+        result.StoryCount.Should().Be(1);
+
+        await using var verificationContext = StoryPublishingTestSupport.CreateDbContext(dbContextOptions);
+        var edition = await verificationContext.Editions
+            .Include(item => item.Stories)
+            .SingleAsync();
+        var markers = JsonSerializer.Deserialize<List<StoryMarkerDto>>(edition.Stories.Single().MarkersJson, SerializerOptions);
+
+        markers.Should().ContainSingle();
+        markers![0].LeftExcerpts.Should().BeEmpty();
+        markers[0].RightExcerpts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RunAsync_skips_story_when_marker_has_no_supporting_excerpts()
+    {
+        var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
+        var setup = await SeedSingleClusterAsync(dbContextOptions);
+        var service = CreateService(
+            dbContextOptions,
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(
+                request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId),
+                request => new StorySynthesisMarkerSelectionResponse(
+                [
+                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napięcie polityczne"), "framing", "Brak wsparcia cytatem.", [], [])
+                ])));
+
+        var result = await service.RunAsync(
+            "test",
+            new StorySynthesisService.SynthesisRunRequest(setup.ClusterRunId, null, "morning"),
+            CancellationToken.None);
+
+        result.StoryCount.Should().Be(0);
+        result.SkippedClusterIds.Should().Contain(setup.ClusterId);
+    }
+
+    [Fact]
+    public async Task RunAsync_skips_story_when_marker_excerpt_snippet_id_is_unknown()
+    {
+        var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
+        var setup = await SeedSingleClusterAsync(dbContextOptions);
+        var service = CreateService(
+            dbContextOptions,
+            new StoryPublishingTestSupport.FakeStorySynthesisModel(
+                request => CreateValidDraftResponse(request, setup.LeftArticleId, setup.RightArticleId),
+                request => new StorySynthesisMarkerSelectionResponse(
+                [
+                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napięcie polityczne"), "framing", "Nieznany cytat.", ["missing-snippet-id"], [])
+                ])));
+
+        var result = await service.RunAsync(
+            "test",
+            new StorySynthesisService.SynthesisRunRequest(setup.ClusterRunId, null, "morning"),
+            CancellationToken.None);
+
+        result.StoryCount.Should().Be(0);
+        result.SkippedClusterIds.Should().Contain(setup.ClusterId);
+    }
+
+    [Fact]
     public async Task RunAsync_accepts_excerpt_with_quote_dash_and_whitespace_variants()
     {
         var dbContextOptions = StoryPublishingTestSupport.CreateDbContextOptions();
@@ -252,7 +364,7 @@ public sealed class StorySynthesisServiceTests
                         [GetFirstSnippetId(request, setup.RightArticleId)])),
                 request => new StorySynthesisMarkerSelectionResponse(
                 [
-                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napiecie” — polityczne"), "framing", "Obie strony inaczej opisuja skale sporu.")
+                    new StorySynthesisMarkerSelectionItem(GetMarkerCandidateId(request, "napiecie” — polityczne"), "framing", "Obie strony inaczej opisuja skale sporu.", [GetFirstSnippetId(request, SourceCamp.Left)], [GetFirstSnippetId(request, SourceCamp.Right)])
                 ])));
 
         var result = await service.RunAsync(
@@ -302,6 +414,13 @@ public sealed class StorySynthesisServiceTests
     private static string GetFirstSnippetId(StorySynthesisDraftRequest request, Guid articleId)
     {
         return request.ExcerptCandidates.First(candidate => candidate.ArticleId == articleId).SnippetId;
+    }
+
+    private static string GetFirstSnippetId(StorySynthesisMarkerSelectionRequest request, string camp)
+    {
+        return string.Equals(camp, SourceCamp.Left, StringComparison.OrdinalIgnoreCase)
+            ? request.LeftExcerptCandidates.First().SnippetId
+            : request.RightExcerptCandidates.First().SnippetId;
     }
 
     private static string GetMarkerCandidateId(StorySynthesisMarkerSelectionRequest request, string exactText)

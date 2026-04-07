@@ -125,10 +125,13 @@ internal static class StoryPublishingTestSupport
 
         private static StorySynthesisMarkerSelectionResponse DefaultMarkerResponder(StorySynthesisMarkerSelectionRequest request)
         {
+            var leftSnippetIds = request.LeftExcerptCandidates.Take(1).Select(candidate => candidate.SnippetId).ToArray();
+            var rightSnippetIds = request.RightExcerptCandidates.Take(1).Select(candidate => candidate.SnippetId).ToArray();
+
             return new StorySynthesisMarkerSelectionResponse(
                 request.MarkerCandidates
                     .Take(request.MaxMarkers)
-                    .Select(candidate => new StorySynthesisMarkerSelectionItem(candidate.MarkerCandidateId, "framing", "Domyslne wyjasnienie testowe."))
+                    .Select(candidate => new StorySynthesisMarkerSelectionItem(candidate.MarkerCandidateId, "framing", "Domyslne wyjasnienie testowe.", leftSnippetIds, rightSnippetIds))
                     .ToList());
         }
     }

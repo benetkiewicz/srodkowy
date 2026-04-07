@@ -67,7 +67,7 @@ Input JSON:
 You select exact marker spans from a finished Polish synthesis.
 
 Return strict JSON with this shape:
-- markers: array of objects with markerCandidateId, kind, explanation
+- markers: array of objects with markerCandidateId, kind, explanation, leftExcerptSnippetIds, rightExcerptSnippetIds
 
 Rules:
 - return between 1 and {request.MaxMarkers} markers
@@ -75,6 +75,10 @@ Rules:
 - do not invent marker text or candidate IDs
 - each selected marker should highlight wording that reveals framing, emphasis, contrast, agency, scale, or conflict
 - keep explanation short and factual in Polish
+- leftExcerptSnippetIds must contain only snippet IDs from LeftExcerptCandidates
+- rightExcerptSnippetIds must contain only snippet IDs from RightExcerptCandidates
+- each marker should have at least one supporting snippet across both sides combined
+- if one side has no strong support for a marker, return an empty array for that side
 - if a candidate does not fit, omit it
 
 Input JSON:
@@ -117,7 +121,9 @@ public sealed record StorySynthesisMarkerSelectionRequest(
     string Synthesis,
     string LeftSummary,
     string RightSummary,
-    IReadOnlyList<StorySynthesisMarkerCandidateInput> MarkerCandidates);
+    IReadOnlyList<StorySynthesisMarkerCandidateInput> MarkerCandidates,
+    IReadOnlyList<StorySynthesisExcerptCandidateInput> LeftExcerptCandidates,
+    IReadOnlyList<StorySynthesisExcerptCandidateInput> RightExcerptCandidates);
 
 public sealed record StorySynthesisMarkerCandidateInput(
     string MarkerCandidateId,
@@ -131,7 +137,9 @@ public sealed record StorySynthesisMarkerSelectionResponse(
 public sealed record StorySynthesisMarkerSelectionItem(
     string MarkerCandidateId,
     string Kind,
-    string Explanation);
+    string Explanation,
+    IReadOnlyList<string>? LeftExcerptSnippetIds,
+    IReadOnlyList<string>? RightExcerptSnippetIds);
 
 public sealed record StorySynthesisSideResponse(
     string Summary,
